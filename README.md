@@ -1,6 +1,6 @@
 # Google Ads API — read-only reporting
 
-Fetches reporting data from Lufa's Google Ads account through our MCC.
+Fetches reporting data from a Google Ads account through a manager account (MCC).
 
 **Phase 1 is read-only, and that is enforced in code, not by convention.** The
 only OAuth scope the Google Ads API offers is
@@ -35,7 +35,7 @@ client; the Google Ads UI gives you the developer token and the account IDs.
 | OAuth client ID + secret | Google Cloud Console (steps 1a–1d below) |
 | Developer token | Google Ads UI, **on the MCC** → Tools & Settings → Setup → API Center |
 | Login customer ID | The MCC's own 10-digit ID (top right in the Google Ads UI) |
-| Customer ID | The Lufa account under that MCC |
+| Customer ID | The account you want to report on, under that MCC |
 
 ---
 
@@ -43,7 +43,7 @@ client; the Google Ads UI gives you the developer token and the account IDs.
 
 1. Go to [console.cloud.google.com](https://console.cloud.google.com).
 2. Project dropdown (top bar) → **New Project**.
-3. Name it something recognisable — `lufa-google-ads-api` — and **Create**.
+3. Name it something recognisable — `google-ads-api` — and **Create**.
 4. Make sure that project is selected in the dropdown before continuing. Nearly
    every problem in this section is actually "configured the wrong project".
 
@@ -70,7 +70,7 @@ Services → Google Auth Platform**, split across **Branding**, **Audience**,
 1. **Google Auth Platform → Branding** — set an app name and your support
    email, then save.
 2. **Google Auth Platform → Audience** — choose a user type:
-   - **Internal** if the Cloud project is on the Lufa Google Workspace org.
+   - **Internal** if the Cloud project belongs to a Google Workspace org.
      Anyone in the org can consent, there is no test-user list, and there is
      nothing to publish. Prefer this.
    - **External** otherwise. It starts in **Testing**, and in that state only

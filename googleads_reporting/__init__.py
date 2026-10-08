@@ -1,4 +1,4 @@
-"""Read-only Google Ads API reporting for Lufa.
+"""Read-only Google Ads API reporting.
 
 Phase 1 is read-only by construction: the only API surface this package exposes
 is ``GoogleAdsService.search`` / ``search_stream`` and

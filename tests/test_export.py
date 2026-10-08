@@ -165,8 +165,8 @@ def test_write_csv_round_trips_without_an_index_column(tmp_path):
 
 def test_write_csv_handles_non_ascii_campaign_names(tmp_path):
     frame = to_dataframe(
-        [{"campaign.name": "Lufa — Paniers d'été", "metrics.clicks": 1}],
+        [{"campaign.name": "Café — Paniers d'été", "metrics.clicks": 1}],
         ("campaign.name", "metrics.clicks"),
     )
     path = write_csv(frame, tmp_path / "accents.csv")
-    assert pd.read_csv(path)["campaign.name"][0] == "Lufa — Paniers d'été"
+    assert pd.read_csv(path)["campaign.name"][0] == "Café — Paniers d'été"

@@ -33,7 +33,7 @@ def row():
     return GoogleAdsRow(
         campaign=Campaign(
             id=1234,
-            name="Lufa — Brand — EN",
+            name="Example — Brand — EN",
             status=CampaignStatusEnum.CampaignStatus.ENABLED,
             advertising_channel_type=(
                 AdvertisingChannelTypeEnum.AdvertisingChannelType.SEARCH
@@ -183,7 +183,7 @@ def test_money_is_converted_and_non_money_is_not(row):
 
 def test_plain_fields_pass_through(row):
     assert get_field(row, "campaign.id") == 1234
-    assert get_field(row, "campaign.name") == "Lufa — Brand — EN"
+    assert get_field(row, "campaign.name") == "Example — Brand — EN"
 
 
 def test_unknown_path_raises_rather_than_returning_none(row):
