@@ -25,26 +25,98 @@ python3 -m venv .venv
 
 Always run through `./.venv/bin/python`, never the system `python3`.
 
-### 1. Credentials you need to collect
+### 1. What you need to collect
 
-| Value | Where it comes from |
+Four things, from two different places. The Cloud Console gives you the OAuth
+client; the Google Ads UI gives you the developer token and the account IDs.
+
+| Value | From |
 |---|---|
+| OAuth client ID + secret | Google Cloud Console (steps 1a–1d below) |
 | Developer token | Google Ads UI, **on the MCC** → Tools & Settings → Setup → API Center |
-| OAuth client ID + secret | Google Cloud Console → APIs & Services → Credentials → Create credentials → OAuth client ID → **Desktop app** |
 | Login customer ID | The MCC's own 10-digit ID (top right in the Google Ads UI) |
 | Customer ID | The Lufa account under that MCC |
 
-On the Cloud project that owns the OAuth client:
+---
 
-- enable the **Google Ads API**;
-- the client must be type **Desktop app** — the consent flow here uses a
-  loopback redirect, and a "Web application" client rejects it;
-- while the consent screen is in **Testing**, add your own Google account under
-  Audience → Test users, or consent fails with `access_denied`.
+#### 1a. Create the Cloud project
 
-A brand-new developer token starts with **Test Account access only** and will
-return `DEVELOPER_TOKEN_NOT_APPROVED` against a production account. Apply for
-Basic access in the API Center.
+1. Go to [console.cloud.google.com](https://console.cloud.google.com).
+2. Project dropdown (top bar) → **New Project**.
+3. Name it something recognisable — `lufa-google-ads-api` — and **Create**.
+4. Make sure that project is selected in the dropdown before continuing. Nearly
+   every problem in this section is actually "configured the wrong project".
+
+Billing is **not** required; the Google Ads API itself has no charge.
+
+> One developer token can be used from several Cloud projects, but a given
+> Cloud project can only ever use **one** developer token.
+
+#### 1b. Enable the Google Ads API
+
+1. **APIs & Services → Library**, or go straight to
+   [the API library](https://console.cloud.google.com/apis/library).
+2. Search for **Google Ads API**, open it, click **Enable**.
+
+Skipping this is the usual cause of a request failing with the API being
+disabled for the project, even though the credentials are perfectly valid.
+
+#### 1c. Configure the consent screen
+
+This used to be a single "OAuth consent screen" page. It is now **APIs &
+Services → Google Auth Platform**, split across **Branding**, **Audience**,
+**Data Access** and **Clients**.
+
+1. **Google Auth Platform → Branding** — set an app name and your support
+   email, then save.
+2. **Google Auth Platform → Audience** — choose a user type:
+   - **Internal** if the Cloud project is on the Lufa Google Workspace org.
+     Anyone in the org can consent, there is no test-user list, and there is
+     nothing to publish. Prefer this.
+   - **External** otherwise. It starts in **Testing**, and in that state only
+     accounts on the test-user list may consent.
+3. If you chose External: still on **Audience**, under **Test users**, click
+   **Add users** and add the Google account you will sign in with — the one
+   with access to the MCC. Miss this and consent fails with `access_denied`,
+   which reads like a permissions problem on the Ads side and is not.
+
+While External + Testing, a refresh token expires after **7 days**. That is
+fine for setup, but for anything recurring either use Internal or publish the
+app (**Audience → Publish app**).
+
+#### 1d. Create the OAuth client
+
+1. **Google Auth Platform → Clients** (equivalently **APIs & Services →
+   Credentials**) → **Create client**.
+2. **Application type: Desktop app.** This matters — the consent flow in
+   `scripts/generate_refresh_token.py` uses a loopback redirect, and a "Web
+   application" client rejects it with a redirect-URI mismatch.
+3. Name it, **Create**, then copy the **client ID** and **client secret** into
+   `.env`. You can reopen the client later to see both again, so losing them is
+   recoverable.
+
+#### 1e. Get the developer token
+
+1. In the **Google Ads UI, signed in to the MCC** (not a leaf account):
+   **Tools & Settings → Setup → API Center**. The section only appears for
+   users with admin access on the manager account.
+2. Copy the developer token.
+
+A new token starts at **Test** access, which can only reach test accounts —
+against a real account it fails with `DEVELOPER_TOKEN_NOT_APPROVED`. The tiers
+are:
+
+| Level | Reaches | Production ops/day |
+|---|---|---|
+| **Test** | test accounts only | — |
+| **Explorer** | test + production | 2,880 |
+| **Basic** | test + production | 15,000 |
+| **Standard** | test + production | unlimited |
+
+Apply for an upgrade from the API Center, or from the Cloud Console's
+[Google Ads API overview page](https://console.cloud.google.com/google/ads-apis/overview)
+under **Upgrade access level**. Explorer is typically auto-approved and is
+plenty for reporting; move to Basic if you start hitting the daily cap.
 
 ### 2. Fill in `.env`
 
@@ -83,15 +155,19 @@ An 8-rung ladder. Each rung assumes the ones above it passed, so **fix the
 first failure** — later ones depend on it. The useful property is that it
 separates three failures that look identical from a single broken report:
 
-| Rung | Proves |
-|---|---|
-| 1–2 | `.env` exists, is `600`, and every required key is set |
-| 3 | the client constructs |
-| 4 | the read-only guard refuses write surfaces (before any live call) |
-| 5 | **the credentials**, on their own — no customer ID is sent |
-| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the MCC is reachable |
-| 7 | `GOOGLE_ADS_CUSTOMER_ID` — the target account is reachable |
-| 8 | a real report runs end to end |
+| Rung | Proves | A failure here means |
+|---|---|---|
+| 1–2 | `.env` exists, is `600`, every required key is set | a missing or blank key |
+| 3 | **the OAuth client and refresh token** | `invalid_client` = wrong ID/secret; `invalid_grant` = revoked or expired refresh token |
+| 4 | the read-only guard refuses write surfaces | checked *before* any live account is touched |
+| 5 | **the developer token** — no customer ID is sent | token is Test-level, or wrong |
+| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the MCC is reachable | wrong MCC ID, or this user has no access to it |
+| 7 | `GOOGLE_ADS_CUSTOMER_ID` — the target is reachable | wrong account, or the MCC does not manage it |
+| 8 | a real report runs end to end | |
+
+Rung 3 is a real network call: the library refreshes the OAuth token eagerly
+when the client is constructed, so bad OAuth credentials surface there rather
+than on the first query. That is what lets rung 5 isolate the developer token.
 
 ---
 
@@ -312,11 +388,13 @@ someone chose rather than a thing that leaked.
 
 | Symptom | Cause |
 |---|---|
-| `DEVELOPER_TOKEN_NOT_APPROVED` | Token has Test Account access only. Apply for Basic in the API Center. |
+| `DEVELOPER_TOKEN_NOT_APPROVED` | Token is at Test access. Apply for Explorer or Basic (API Center, or the Cloud Console Ads API overview page). |
+| API disabled for the project | The Google Ads API was never enabled — step 1b, on the project that owns the OAuth client. |
+| `redirect_uri_mismatch` | The OAuth client is a "Web application". It must be **Desktop app**. |
 | `USER_PERMISSION_DENIED` | The OAuth user has no access to that customer ID, or `LOGIN_CUSTOMER_ID` is not the managing MCC. |
 | `CUSTOMER_NOT_ENABLED` | The account is cancelled or suspended. |
-| `invalid_grant` | Refresh token revoked, or unused for 6 months. Re-run the generator. |
-| `access_denied` at consent | Your account is not a Test user on the consent screen. |
+| `invalid_grant` | Refresh token revoked, unused for 6 months, or 7 days old on an unpublished External consent screen. Re-run the generator. |
+| `access_denied` at consent | Your account is not on Audience → Test users (External + Testing only). |
 | No refresh token returned | The grant already existed. Remove the app at myaccount.google.com/permissions and retry. |
 | Rung 5 fails | Credentials. No customer ID was sent, so account settings are not implicated. |
 | Rung 5 passes, 6 fails | `GOOGLE_ADS_LOGIN_CUSTOMER_ID`. |
