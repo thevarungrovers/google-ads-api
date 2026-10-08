@@ -48,15 +48,34 @@ ACCESS_LEVEL_MARKERS = (
     "developer_token_not_approved",
 )
 
-ACCESS_LEVEL_HINT = """The credentials are fine. The Cloud project is at TEST access, which can
-  only reach test accounts -- nothing in .env is wrong.
+ACCESS_LEVEL_HINT = """The credentials are fine. Nothing in .env is wrong.
 
-  Apply for Explorer (usually auto-approved; 2,880 production ops/day):
-    - Google Ads UI, on the MCC: Tools & Settings > Setup > API Center, or
-    - https://console.cloud.google.com/google/ads-apis/overview
-      > Upgrade access level
+  The access level (Test/Explorer/Basic/Standard) belongs to the GOOGLE CLOUD
+  PROJECT that issued your OAuth client -- NOT to the developer token. The
+  API Center in the Google Ads UI is the legacy route and will not fix this.
+
+  *** The usual cause is a PROJECT MISMATCH. *** If you upgraded one project
+  but GOOGLE_ADS_CLIENT_ID came from another, you silently fall back to Test.
+  The project number is the part of the client ID before the first '-'.
+
+  Check THAT project's access level directly:
+    https://console.cloud.google.com/google/ads-apis/overview?project={project}
+
+  Then either apply for Explorer there (usually auto-approved), or create an
+  OAuth client inside the already-approved project, put its ID and secret in
+  .env and re-run scripts/generate_refresh_token.py.
 
   Re-run this script once the upgrade lands."""
+
+
+def oauth_project_number(client_id: str) -> str:
+    """The Cloud project number embedded in an OAuth client ID.
+
+    A client ID is '<project_number>-<random>.apps.googleusercontent.com'.
+    The project number is not a secret, and it is the one value that has to
+    match the project holding the approved access level.
+    """
+    return client_id.split("-", 1)[0] if "-" in client_id else "YOUR_PROJECT"
 
 
 def _is_access_level_error(exc: Exception) -> bool:
@@ -213,7 +232,9 @@ def main(argv: list[str] | None = None) -> int:
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "6. MCC reachable", _first_lines(exc))
         if _is_access_level_error(exc):
-            hint(ACCESS_LEVEL_HINT)
+            hint(ACCESS_LEVEL_HINT.format(
+                project=oauth_project_number(settings.client_id)
+            ))
         else:
             hint(
                 f"GOOGLE_ADS_LOGIN_CUSTOMER_ID "
@@ -262,7 +283,9 @@ def main(argv: list[str] | None = None) -> int:
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "7. target account reachable", _first_lines(exc))
         if _is_access_level_error(exc):
-            hint(ACCESS_LEVEL_HINT)
+            hint(ACCESS_LEVEL_HINT.format(
+                project=oauth_project_number(settings.client_id)
+            ))
         else:
             hint(
                 "The credentials and the MCC both work, so the problem is "
@@ -294,7 +317,9 @@ def main(argv: list[str] | None = None) -> int:
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "8. campaigns report runs", _first_lines(exc))
         if _is_access_level_error(exc):
-            hint(ACCESS_LEVEL_HINT)
+            hint(ACCESS_LEVEL_HINT.format(
+                project=oauth_project_number(settings.client_id)
+            ))
         return _finish(ladder)
 
     if not sample:

@@ -102,9 +102,34 @@ app (**Audience → Publish app**).
    users with admin access on the manager account.
 2. Copy the developer token.
 
-A new token starts at **Test** access, which can only reach test accounts —
-against a real account it fails with `DEVELOPER_TOKEN_NOT_APPROVED`. The tiers
-are:
+#### 1f. Raise the access level — on the right Cloud project
+
+**The access level belongs to the Cloud project your OAuth client came from,
+not to the developer token.** This trips people up: you can hold Explorer
+access and still be refused, because the `GOOGLE_ADS_CLIENT_ID` in `.env` was
+issued by a *different* project than the one you upgraded. A project that is
+not approved silently falls back to **Test**, which reaches test accounts only
+and fails on a real account with:
+
+> The Google Cloud project is only approved for use with test accounts.
+
+The project number is the part of the client ID before the first `-`
+(`960632522930-abc….apps.googleusercontent.com` → `960632522930`). Check *that*
+project:
+
+```
+https://console.cloud.google.com/google/ads-apis/overview?project=<PROJECT_NUMBER>
+```
+
+Apply for the upgrade there. The **API Center** in the Google Ads UI is the
+legacy route and will not lift a Cloud project's restriction.
+
+If you would rather keep an approved project you already have, create a new
+OAuth client inside it (step 1d), put that ID and secret in `.env`, and re-run
+`scripts/generate_refresh_token.py` — a refresh token is bound to the client
+that issued it.
+
+The tiers:
 
 | Level | Reaches | Production ops/day |
 |---|---|---|
@@ -113,10 +138,10 @@ are:
 | **Basic** | test + production | 15,000 |
 | **Standard** | test + production | unlimited |
 
-Apply for an upgrade from the API Center, or from the Cloud Console's
-[Google Ads API overview page](https://console.cloud.google.com/google/ads-apis/overview)
-under **Upgrade access level**. Explorer is typically auto-approved and is
-plenty for reporting; move to Basic if you start hitting the daily cap.
+Explorer is typically auto-approved and is plenty for reporting; move to Basic
+if you start hitting the daily cap. Note Explorer still withholds the billing,
+planning, account-creation and user-invitation services — none of which Phase 1
+touches.
 
 ### 2. Fill in `.env`
 
@@ -388,7 +413,7 @@ someone chose rather than a thing that leaked.
 
 | Symptom | Cause |
 |---|---|
-| `DEVELOPER_TOKEN_NOT_APPROVED` | Token is at Test access. Apply for Explorer or Basic (API Center, or the Cloud Console Ads API overview page). |
+| `DEVELOPER_TOKEN_NOT_APPROVED` / `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` / "only approved for use with test accounts" | The **Cloud project** behind `GOOGLE_ADS_CLIENT_ID` is at Test access — not the developer token. Usually a project mismatch: see §1f. |
 | API disabled for the project | The Google Ads API was never enabled — step 1b, on the project that owns the OAuth client. |
 | `redirect_uri_mismatch` | The OAuth client is a "Web application". It must be **Desktop app**. |
 | `USER_PERMISSION_DENIED` | The OAuth user has no access to that customer ID, or `LOGIN_CUSTOMER_ID` is not the managing MCC. |
