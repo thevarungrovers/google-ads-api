@@ -1,14 +1,21 @@
-# Google Ads API — read-only reporting
+# Google Ads API
 
-Fetches reporting data from a Google Ads account through a manager account (MCC).
+Pull reporting data out of a Google Ads account, and create or change campaigns,
+budgets, ad groups and ads.
 
-**Phase 1 is read-only, and that is enforced in code, not by convention.** The
-only OAuth scope the Google Ads API offers is
-`https://www.googleapis.com/auth/adwords`, which has no read-only variant — the
-refresh token in `.env` is fully capable of changing the account. See
-[Read-only enforcement](#read-only-enforcement) for the three layers that stop
-it, and [Phase 2](#phase-2-adding-writes) for how to add writes without
-dismantling them.
+Two commands do the work:
+
+| | |
+|---|---|
+| `scripts/fetch_report.py` | **reads** — campaign, keyword and account reports |
+| `scripts/manage.py` | **writes** — find, create, update, pause |
+
+Reading and writing are kept strictly apart. The reporting code *cannot* mutate
+an account: the only OAuth scope Google offers is
+`https://www.googleapis.com/auth/adwords`, which has no read-only variant, so
+the refresh token in `.env` is perfectly capable of changing things. That
+restriction is therefore enforced in code and tested, not left to convention —
+see [How reads and writes are kept apart](#how-reads-and-writes-are-kept-apart).
 
 ---
 
@@ -163,8 +170,8 @@ The tiers (per Cloud project):
 
 Explorer is typically auto-approved and is plenty for reporting; move to Basic
 if you start hitting the daily cap. Note Explorer still withholds the billing,
-planning, account-creation and user-invitation services — none of which Phase 1
-touches.
+planning, account-creation and user-invitation services — none of which this
+tool touches.
 
 ### 2. Fill in `.env`
 
@@ -262,7 +269,7 @@ each other.
 
 ---
 
-## Changing things (Phase 2)
+## Changing things
 
 `scripts/manage.py` creates and updates campaigns, budgets, ad groups and ads.
 
@@ -337,14 +344,38 @@ Every applied mutation is written to `audit/mutations-<date>.jsonl` — two
 records, `attempt` before the call and `outcome` after, so an attempt with no
 outcome tells you the process died mid-request.
 
-### The read-only guarantee still holds
+### Creating a whole campaign
 
-Phase 2 lives entirely in `googleads_reporting/write/`. `ReadOnlyGoogleAdsClient`
-gained nothing; reaching a write means importing a different class from a
-different subpackage. `tests/test_readonly_guard.py` parses every *other* source
-file with `ast` and fails if it so much as calls a `mutate*` method — and
-separately asserts that `write/` really does contain one, so the carve-out
-cannot quietly become decorative.
+```bash
+./.venv/bin/python scripts/manage.py campaign new
+```
+
+Prompts for channel, name, budget, ad group, ad text and image paths, then
+builds the lot — budget, campaign, ad group, image assets, ad — as **one atomic
+request**. Each step needs the previous step's resource name, so they are
+chained with temp ids (`customers/X/campaignBudgets/-1`). A failure anywhere
+means nothing is created; run as separate calls, a failure at the ad step would
+leave a campaign and ad group already built, with a budget attached.
+
+Every answer is checked where you type it. A bare domain is offered back as
+`https://…`, over-long text says how many characters to drop, and image paths
+accept whatever your terminal produces — including a file dragged in from
+Finder.
+
+Images come in four slots:
+
+| Slot | Ratio | Minimum | Required |
+|---|---|---|---|
+| Marketing images | 1.91:1 | 600×314 | yes |
+| Square marketing images | 1:1 | 300×300 | yes |
+| Logos | **4:1** | 512×128 | no |
+| Square logos | 1:1 | 128×128 | no |
+
+JPEG, PNG or GIF, 5 MB each, checked by file header rather than extension.
+
+**Video campaigns cannot be created through the API.** Google refuses every
+sub-type — verified against the live account — so the tool says so up front
+rather than relaying an error code. Build those in the Google Ads UI.
 
 ---
 
@@ -359,9 +390,13 @@ googleads_reporting/
   fields.py       row extraction, enum names, micros conversion
   export.py       DataFrame / CSV output, totals
   reports/        declarative report definitions + registry
-  write/          Phase 2 — the ONLY place that can mutate
+  write/          the ONLY place that can mutate an account
     client.py     MutatingGoogleAdsClient, validate-then-apply
     plan.py       PlannedChange: the protos and the diff together
+    spec.py       CampaignSpec — a new campaign as plain data
+    builder.py    a spec -> one atomic multi-entity request
+    wizard.py     the prompts; a frontend to spec.py, not the only way in
+    media.py      image reading and per-slot shape checks
     lookup.py     find an entity by name, refuse ambiguity
     budgets.py / campaigns.py / adgroups.py / ads.py
     audit.py      append-only JSONL log of every mutation
@@ -370,7 +405,7 @@ scripts/
   test_connection.py          diagnostic ladder
   fetch_report.py             run a report (read)
   manage.py                   create and update (write)
-tests/                        394 tests, all offline
+tests/                        447 tests, all offline
 ```
 
 Pinned in `requirements.txt`: `google-ads==33.0.0`, which bundles API versions
@@ -380,9 +415,11 @@ the one this code targets — bump deliberately, then run the tests.
 
 ---
 
-## Read-only enforcement
+## How reads and writes are kept apart
 
-Three independent layers, because the token itself is not restricted:
+Everything that can change an account lives in `googleads_reporting/write/`.
+Everything else is held to read-only, and that is enforced rather than assumed,
+because the token itself is not restricted:
 
 1. **Service allowlist** — `client.ALLOWED_SERVICES` admits only
    `GoogleAdsService` and `CustomerService`. Anything else raises
@@ -394,11 +431,17 @@ Three independent layers, because the token itself is not restricted:
    service alone would leave the write path one attribute access away. A test
    asserts that `.mutate` really does exist on the generated client, so nobody
    later removes this layer as surplus.
-3. **Source scan** — `tests/test_readonly_guard.py` greps
-   `googleads_reporting/` and `scripts/` for any `.mutate*(` call, with a
-   negative control proving the pattern matches a real one. A second scan
-   refuses `load_from_storage` / `load_from_env`, so credentials cannot migrate
-   out of `.env` into a `google-ads.yaml`.
+3. **Source scan** — `tests/test_readonly_guard.py` parses every source file
+   *outside* `write/` with `ast` and fails if it so much as calls a `mutate*`
+   method. It also asserts that `write/` genuinely contains one, so the
+   carve-out cannot quietly become decorative, and that the pattern matches a
+   real offender, so a scan that matched nothing could not pass silently. A
+   second scan refuses `load_from_storage` / `load_from_env`, so credentials
+   cannot migrate out of `.env` into a `google-ads.yaml`.
+
+The write side has its own allowlist. `BillingSetupService` and
+`CustomerUserAccessService` are not on it, so billing details and account
+access cannot be touched at all.
 
 The query layer helps too: GAQL has no mutating form, and
 `query.assert_select_only` refuses anything that is not a bare `SELECT`,
@@ -412,7 +455,13 @@ including a write keyword smuggled through `--where`.
 
 ## Things that will bite you
 
-### Money is in micros — and not only where the name says so
+### Money is in micros on the way in, and currency on the way out
+
+**You never type micros.** Every `--amount` is in the account's currency;
+the conversion happens before sending. The rest of this section is about
+reading values back.
+
+
 
 `metrics.cost_micros` is obviously micros. But `metrics.average_cpc`,
 `average_cpm`, `average_cost` and `cost_per_conversion` are declared `double`
@@ -477,7 +526,7 @@ queries `customer_client` from the MCC.
 ## Tests
 
 ```bash
-./.venv/bin/python -m pytest          # all 250, offline
+./.venv/bin/python -m pytest          # all 447, offline
 ```
 
 Every test runs without credentials and without network. Two kinds are worth
@@ -495,20 +544,6 @@ knowing about:
 
 ---
 
-## Phase 2: adding writes
-
-Do **not** widen `ALLOWED_SERVICES` or `ALLOWED_METHODS`.
-
-`client.build_raw_client(settings)` is the single place credentials become a
-client (a test pins it as the only `load_from_dict` call). Reuse it from a new
-sibling module with its own allowlist, its own confirmation prompt, and its own
-tests. The read-only guarantee of `ReadOnlyGoogleAdsClient` then still means
-something, and the mutate scan keeps covering everything outside the new module
-— update its excluded paths deliberately, so the write surface stays a thing
-someone chose rather than a thing that leaked.
-
----
-
 ## Security
 
 - `.env` is the only credential at rest. There is no `google-ads.yaml`, and a
@@ -521,6 +556,9 @@ someone chose rather than a thing that leaked.
   presence and length only, and a test asserts no prefix or suffix leaks.
 - GAQL has no parameter binding, so `query.quote_literal` **refuses** values
   containing a quote, backslash or newline rather than trying to escape them.
+- Every applied change is written to `audit/mutations-<date>.jsonl` (gitignored)
+  — two records per mutation, `attempt` before and `outcome` after, so an
+  attempt with no outcome tells you the process died mid-request.
 - If the refresh token leaks: revoke it at
   [myaccount.google.com/permissions](https://myaccount.google.com/permissions),
   then re-run `scripts/generate_refresh_token.py`.
