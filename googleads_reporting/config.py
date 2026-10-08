@@ -136,7 +136,7 @@ class Settings:
     client_id: str
     client_secret: str
     refresh_token: str
-    login_customer_id: str
+    login_customer_id: str | None
     customer_id: str | None
     api_version: str
     output_dir: Path
@@ -146,6 +146,7 @@ class Settings:
         load_env(path)
 
         customer_id = env("GOOGLE_ADS_CUSTOMER_ID")
+        login_customer_id = env("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
         output_dir = Path(env("GOOGLE_ADS_OUTPUT_DIR", DEFAULT_OUTPUT_DIR))
         if not output_dir.is_absolute():
             output_dir = PROJECT_ROOT / output_dir
@@ -159,8 +160,14 @@ class Settings:
                 "GOOGLE_ADS_REFRESH_TOKEN",
                 hint="Generate one with scripts/generate_refresh_token.py.",
             ),
-            login_customer_id=normalize_customer_id(
-                require("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+            # Optional. Only needed when the OAuth user reaches the target
+            # account THROUGH a manager rather than directly. Verified against
+            # the live API: with direct access, every query -- including
+            # customer_client against the manager -- works without it.
+            login_customer_id=(
+                normalize_customer_id(login_customer_id)
+                if login_customer_id
+                else None
             ),
             customer_id=(
                 normalize_customer_id(customer_id) if customer_id else None
@@ -181,15 +188,19 @@ class Settings:
         # reject calls that still carry one -- so sending it buys nothing and
         # costs a future breakage. Verified against the live API: a query
         # succeeds with no developer token in the payload at all.
-        return {
+        payload: dict[str, object] = {
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "refresh_token": self.refresh_token,
-            "login_customer_id": self.login_customer_id,
             # proto-plus surfaces enums as objects with a .name, which
             # googleads_reporting.fields relies on when flattening rows.
             "use_proto_plus": True,
         }
+        # Sent only when set: an empty login_customer_id header is not the same
+        # as no header, and the API rejects the former.
+        if self.login_customer_id:
+            payload["login_customer_id"] = self.login_customer_id
+        return payload
 
     def describe(self) -> dict[str, str]:
         """A diagnostic summary that is safe to print.
@@ -212,7 +223,10 @@ class Settings:
             "oauth_cloud_project": self.oauth_project,
             "client_secret": secret(self.client_secret),
             "refresh_token": secret(self.refresh_token),
-            "login_customer_id": self.login_customer_id,
+            "login_customer_id": (
+                self.login_customer_id
+                or "(not set — only needed for manager-account access)"
+            ),
             "customer_id": self.customer_id or "(not set)",
             "api_version": self.api_version,
             "output_dir": str(self.output_dir),

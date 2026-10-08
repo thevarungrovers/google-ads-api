@@ -37,11 +37,19 @@ client; the Google Ads UI gives you the developer token and the account IDs.
 > the Google Ads UI cheerfully shows your token at Explorer. Step 1f is the
 > check; doing it now costs a minute and saves an hour.
 
-| Value | From |
-|---|---|
-| OAuth client ID + secret | Google Cloud Console (steps 1a–1d below) |
-| Login customer ID | The MCC's own 10-digit ID (top right in the Google Ads UI) |
-| Customer ID | The account you want to report on, under that MCC |
+| Value | Required? | From |
+|---|---|---|
+| OAuth client ID + secret | **yes** | Google Cloud Console (steps 1a–1d below) |
+| Customer ID | **yes** | The 10-digit ID of the account to report on |
+| Login customer ID | only sometimes | A manager account's own 10-digit ID — see below |
+
+**You do not need a manager account (MCC) just to use this.**
+`GOOGLE_ADS_LOGIN_CUSTOMER_ID` tells the API to *act as* a manager, and it
+matters only when the signed-in Google account reaches the target account
+**through** that manager rather than having direct access to it. If your
+consent account can open the target account directly, leave it blank — verified
+against the live API, every query works without it, including listing accounts
+under a manager. It is unrelated to the developer-token change below.
 
 > **No developer token needed.** They were **sunset on 2026-09-09**. The API
 > ignores them, access is decided by the Cloud project behind your OAuth client
@@ -115,10 +123,10 @@ app (**Audience → Publish app**).
 
 #### 1e. Find your account IDs
 
-1. In the **Google Ads UI**, the 10-digit ID at the top right of the **MCC** is
-   `GOOGLE_ADS_LOGIN_CUSTOMER_ID`.
-2. The account you want to report on, under that MCC, is
-   `GOOGLE_ADS_CUSTOMER_ID`.
+1. `GOOGLE_ADS_CUSTOMER_ID` — the 10-digit ID of the account you want to report
+   on, shown at the top right in the Google Ads UI.
+2. `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — **only if** you reach that account through
+   a manager account: the manager's own 10-digit ID. Otherwise leave it blank.
 
 Both may be pasted in dashed form; they are normalized automatically.
 
@@ -224,7 +232,7 @@ separates three failures that look identical from a single broken report:
 | 3 | **the OAuth client and refresh token** | `invalid_client` = wrong ID/secret; `invalid_grant` = revoked or expired refresh token |
 | 4 | the read-only guard refuses write surfaces | checked *before* any live account is touched |
 | 5 | the API answers this identity — no customer ID is sent | the Google Ads API is not enabled on the project. Note this call is *exempt* from the access-level check, so passing here does **not** prove production access |
-| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the MCC is reachable | wrong MCC ID, no access to it, **or the Cloud project is at Test access (§1f)** — the first real query is where that surfaces |
+| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the manager is reachable (skipped with a WARN if unset) | wrong manager ID, no access to it, **or the Cloud project is at Test access (§1f)** — the first real query is where that surfaces |
 | 7 | `GOOGLE_ADS_CUSTOMER_ID` — the target is reachable | wrong account, or the MCC does not manage it |
 | 8 | a real report runs end to end | |
 
@@ -249,8 +257,8 @@ than on the first query. That is what lets rung 5 isolate the developer token.
 # A fixed window
 ./.venv/bin/python scripts/fetch_report.py keywords --start 2026-09-01 --end 2026-09-30 --csv
 
-# Accounts under the MCC (run it against the MCC, not a leaf account)
-./.venv/bin/python scripts/fetch_report.py accounts --customer-id <MCC-ID>
+# Accounts under a manager (run it against the manager, not a leaf account)
+./.venv/bin/python scripts/fetch_report.py accounts --customer-id <MANAGER-ID>
 
 # See the GAQL without calling the API
 ./.venv/bin/python scripts/fetch_report.py campaigns --days 7 --show-query
@@ -457,11 +465,11 @@ someone chose rather than a thing that leaked.
 | `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` / `authorization_error=32` / "only approved for use with test accounts" | The **Cloud project** behind `GOOGLE_ADS_CLIENT_ID` is at Test access. Usually a project mismatch: see §1f. Nothing to do with developer tokens, which are sunset. |
 | API disabled for the project | The Google Ads API was never enabled — step 1b, on the project that owns the OAuth client. |
 | `redirect_uri_mismatch` | The OAuth client is a "Web application". It must be **Desktop app**. |
-| `USER_PERMISSION_DENIED` | The OAuth user has no access to that customer ID, or `LOGIN_CUSTOMER_ID` is not the managing MCC. |
+| `USER_PERMISSION_DENIED` | The OAuth user has no access to that customer ID, or `LOGIN_CUSTOMER_ID` is set to an account that does not manage it. If the user has direct access, try clearing `LOGIN_CUSTOMER_ID` entirely. |
 | `CUSTOMER_NOT_ENABLED` | The account is cancelled or suspended. |
 | `invalid_grant` | Refresh token revoked, unused for 6 months, or 7 days old on an unpublished External consent screen. Re-run the generator. |
 | `access_denied` at consent | Your account is not on Audience → Test users (External + Testing only). |
 | No refresh token returned | The grant already existed. Remove the app at myaccount.google.com/permissions and retry. |
 | Rung 5 fails | Credentials. No customer ID was sent, so account settings are not implicated. |
-| Rung 5 passes, 6 fails | `GOOGLE_ADS_LOGIN_CUSTOMER_ID`. |
+| Rung 5 passes, 6 fails | The Cloud project's access level (§1f), or `GOOGLE_ADS_LOGIN_CUSTOMER_ID`. The hint distinguishes them. |
 | Rung 6 passes, 7 fails | `GOOGLE_ADS_CUSTOMER_ID`, or the MCC does not manage it. |

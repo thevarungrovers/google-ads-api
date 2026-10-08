@@ -28,12 +28,12 @@ REQUIRED = {
     "GOOGLE_ADS_CLIENT_ID": "client-id-placeholder.apps.googleusercontent.com",
     "GOOGLE_ADS_CLIENT_SECRET": "client-secret-placeholder",
     "GOOGLE_ADS_REFRESH_TOKEN": "refresh-token-placeholder",
-    "GOOGLE_ADS_LOGIN_CUSTOMER_ID": "123-456-7890",
 }
 
 ALL_KEYS = [
     *REQUIRED,
     "GOOGLE_ADS_DEVELOPER_TOKEN",
+    "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
     "GOOGLE_ADS_CUSTOMER_ID",
     "GOOGLE_ADS_API_VERSION",
     "GOOGLE_ADS_OUTPUT_DIR",
@@ -121,12 +121,64 @@ def test_blank_optional_keys_fall_back_to_defaults(clean_env):
 def test_from_env_normalizes_customer_ids(clean_env):
     for key, value in REQUIRED.items():
         clean_env.setenv(key, value)
+    clean_env.setenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "123-456-7890")
     clean_env.setenv("GOOGLE_ADS_CUSTOMER_ID", "098-765-4321")
 
     settings = Settings.from_env()
 
     assert settings.login_customer_id == "1234567890"
     assert settings.customer_id == "0987654321"
+
+
+# --------------------------------------------------------------------------
+# login_customer_id is optional
+# --------------------------------------------------------------------------
+
+
+def test_settings_load_without_a_manager_account(clean_env):
+    """Not everyone reaches their account through an MCC.
+
+    Verified against the live API on 2026-10-08: with direct access, every
+    query works without it -- including customer_client against the manager.
+    """
+    for key, value in REQUIRED.items():
+        clean_env.setenv(key, value)
+    clean_env.setenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")
+    clean_env.setenv("GOOGLE_ADS_CUSTOMER_ID", "098-765-4321")
+
+    settings = Settings.from_env()
+
+    assert settings.login_customer_id is None
+    assert settings.customer_id == "0987654321"
+
+
+def test_an_unset_login_customer_id_is_omitted_from_the_payload():
+    """An empty header is not the same as no header; the API rejects the former."""
+    payload = _settings(login_customer_id=None).to_google_ads_dict()
+    assert "login_customer_id" not in payload
+
+
+def test_a_set_login_customer_id_is_sent():
+    payload = _settings(login_customer_id="1234567890").to_google_ads_dict()
+    assert payload["login_customer_id"] == "1234567890"
+
+
+def test_describe_explains_an_absent_login_customer_id():
+    described = _settings(login_customer_id=None).describe()["login_customer_id"]
+    assert "not set" in described
+    assert "manager" in described
+    assert "MISSING" not in described
+
+
+def test_a_malformed_login_customer_id_is_still_rejected(clean_env):
+    """Optional does not mean 'accept nonsense'."""
+    from googleads_reporting.customer_id import CustomerIdError
+
+    for key, value in REQUIRED.items():
+        clean_env.setenv(key, value)
+    clean_env.setenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "not-an-id")
+    with pytest.raises(CustomerIdError):
+        Settings.from_env()
 
 
 def test_from_env_reports_each_missing_required_key(clean_env):
@@ -171,6 +223,7 @@ def test_google_ads_dict_has_the_keys_the_library_requires():
     payload = _settings().to_google_ads_dict()
     assert payload["use_proto_plus"] is True
     assert set(payload) == {
+        "login_customer_id",
         "client_id",
         "client_secret",
         "refresh_token",

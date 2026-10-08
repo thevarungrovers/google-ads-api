@@ -224,14 +224,22 @@ def main(argv: list[str] | None = None) -> int:
         + " (does not prove production access -- see rung 6)",
     )
 
-    # -- 6. the MCC --------------------------------------------------------
+    # -- 6. the manager account (optional) --------------------------------
     mcc = settings.login_customer_id
+    if not mcc:
+        ladder.record(
+            WARN,
+            "6. manager account reachable",
+            "skipped: GOOGLE_ADS_LOGIN_CUSTOMER_ID is not set, which is fine "
+            "when the OAuth user reaches the account directly",
+        )
+        return _target_rungs(ladder, client, settings, args)
     try:
         rows = client.rows(
             get_report("accounts").build(limit=200), customer_id=mcc
         )
     except GoogleAdsReportingError as exc:
-        ladder.record(FAIL, "6. MCC reachable", _first_lines(exc))
+        ladder.record(FAIL, "6. manager account reachable", _first_lines(exc))
         if _is_access_level_error(exc):
             hint(ACCESS_LEVEL_HINT.format(
                 project=oauth_project_number(settings.client_id)
@@ -247,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ladder.record(
         PASS,
-        f"6. MCC {format_customer_id(mcc)} reachable",
+        f"6. manager {format_customer_id(mcc)} reachable",
         f"{len(rows)} account(s) under it",
     )
     for row in rows[:15]:
@@ -263,6 +271,11 @@ def main(argv: list[str] | None = None) -> int:
     if len(rows) > 15:
         print(f"         ... and {len(rows) - 15} more")
 
+    return _target_rungs(ladder, client, settings, args)
+
+
+def _target_rungs(ladder, client, settings, args) -> int:
+    """Rungs 7 and 8: the account being reported on."""
     # -- 7. the target account --------------------------------------------
     try:
         target = settings.resolve_customer_id(args.customer_id)
