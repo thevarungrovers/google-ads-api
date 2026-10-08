@@ -196,6 +196,27 @@ def build(
     return BuiltCampaign(operations=operations, plan=plan, images=images)
 
 
+def execute_build(
+    client: MutatingGoogleAdsClient,
+    built: BuiltCampaign,
+    *,
+    apply: bool = False,
+    customer_id: str | None = None,
+):
+    """Send a built campaign. The one seam callers outside write/ use.
+
+    Exists so the CLI never calls a mutate method itself: the read-only scan
+    then stays a flat "nothing outside write/ mutates", with no per-file
+    exceptions to argue about later.
+    """
+    return client.mutate_atomic(
+        built.operations,
+        customer_id=customer_id,
+        apply=apply,
+        describe=built.plan.describe(),
+    )
+
+
 def _image_asset_operation(client, image: ImageFile, resource_name: str):
     op = client.get_type("MutateOperation")
     asset = op.asset_operation.create

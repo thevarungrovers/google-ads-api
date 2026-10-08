@@ -286,7 +286,7 @@ def run_find(client, args, target: str) -> int:
 
 def run_new_campaign(client, args, target: str) -> int:
     """The interactive create path: ask, build, validate, confirm, apply."""
-    from googleads_reporting.write.builder import build
+    from googleads_reporting.write.builder import build, execute_build
     from googleads_reporting.write.wizard import Aborted, ask_for_campaign
 
     try:
@@ -310,10 +310,7 @@ def run_new_campaign(client, args, target: str) -> int:
 
     print("\nValidating the whole chain with Google (creating nothing)...")
     try:
-        client.mutate_atomic(
-            built.operations, customer_id=target, apply=False,
-            describe=built.plan.describe(),
-        )
+        execute_build(client, built, customer_id=target, apply=False)
     except MutationError as exc:
         print(f"\nvalidation FAILED -- nothing was created:\n{exc}", file=sys.stderr)
         return 1
@@ -328,10 +325,7 @@ def run_new_campaign(client, args, target: str) -> int:
         return 1
 
     try:
-        result = client.mutate_atomic(
-            built.operations, customer_id=target, apply=True,
-            describe=built.plan.describe(),
-        )
+        result = execute_build(client, built, customer_id=target, apply=True)
     except MutationError as exc:
         print(f"\nCREATE FAILED -- nothing was created:\n{exc}", file=sys.stderr)
         return 1
