@@ -28,6 +28,9 @@ __pycache__/
 data/
 output/
 
+# ---- Mutation audit logs: account data, and they are the local record ----
+audit/
+
 # ---- OS / editor ----
 .DS_Store
 .idea/

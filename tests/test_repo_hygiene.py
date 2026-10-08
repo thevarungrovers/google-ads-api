@@ -104,6 +104,7 @@ def test_the_essential_non_python_files_are_tracked():
         "refresh_token",
         "private-key.pem",
         "output/campaigns_1234567890_20261008-120000.csv",
+        "audit/mutations-2026-10-08.jsonl",
         "data/raw.csv",
         ".venv/lib/python3.13/site-packages/x.py",
         "__pycache__/config.cpython-313.pyc",
