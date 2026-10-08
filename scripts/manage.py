@@ -102,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("--campaign-id")
     rename.add_argument("--name")
     rename.add_argument("--new-name", required=True)
+    campaign.add_parser(
+        "new",
+        parents=[common],
+        help="create a campaign, ad group and ad by answering prompts",
+    )
+
     setbudget = campaign.add_parser("set-budget", parents=[common])
     setbudget.add_argument("--campaign-id")
     setbudget.add_argument(
@@ -278,6 +284,65 @@ def run_find(client, args, target: str) -> int:
     return 0
 
 
+def run_new_campaign(client, args, target: str) -> int:
+    """The interactive create path: ask, build, validate, confirm, apply."""
+    from googleads_reporting.write.builder import build
+    from googleads_reporting.write.wizard import Aborted, ask_for_campaign
+
+    try:
+        spec = ask_for_campaign()
+    except Aborted as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    try:
+        built = build(client, spec, customer_id=target)
+    except MutationError as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        return 2
+
+    print("\n" + "=" * 68)
+    print(built.plan.render())
+    for image in built.images:
+        print(f"    image {image.describe()}")
+    print(f"    {len(built.operations)} operations in ONE atomic request")
+    print("=" * 68)
+
+    print("\nValidating the whole chain with Google (creating nothing)...")
+    try:
+        client.mutate_atomic(
+            built.operations, customer_id=target, apply=False,
+            describe=built.plan.describe(),
+        )
+    except MutationError as exc:
+        print(f"\nvalidation FAILED -- nothing was created:\n{exc}", file=sys.stderr)
+        return 1
+    print("  server validation: OK")
+
+    if args.dry_run:
+        print("\n--dry-run: stopping here. Nothing was created.")
+        return 0
+
+    if not args.yes and not confirm(built.plan, target):
+        print("Aborted. Nothing was created.")
+        return 1
+
+    try:
+        result = client.mutate_atomic(
+            built.operations, customer_id=target, apply=True,
+            describe=built.plan.describe(),
+        )
+    except MutationError as exc:
+        print(f"\nCREATE FAILED -- nothing was created:\n{exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n{result}")
+    for name in result.resource_names:
+        print(f"  {name}")
+    print(f"  audit: {client.settings.output_dir.parent / 'audit'}")
+    return 0
+
+
 def confirm(plan: PlannedChange, target: str) -> bool:
     print("\n" + "=" * 68)
     print(plan.render())
@@ -310,6 +375,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.entity == "find":
         return run_find(client, args, target)
+
+    if args.entity == "campaign" and args.action == "new":
+        return run_new_campaign(client, args, target)
 
     try:
         plan = build_plan(client, args)

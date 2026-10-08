@@ -29,8 +29,11 @@ ALLOWED_MUTATE_SERVICES = frozenset(
         "AdGroupService",
         "AdGroupAdService",
         "AdGroupCriterionService",
+        "AssetService",
         # Reads are allowed here too: a mutation needs to fetch current state to
-        # show a before/after diff.
+        # show a before/after diff. GoogleAdsService also carries the ATOMIC
+        # multi-entity mutate used to build a whole campaign in one request --
+        # see MutatingGoogleAdsClient.mutate_atomic.
         "GoogleAdsService",
     }
 )
@@ -220,6 +223,81 @@ class MutatingGoogleAdsClient:
             partial_failure_error=partial_error,
         )
 
+    def mutate_atomic(
+        self,
+        operations: Sequence[Any],
+        *,
+        customer_id: str | None = None,
+        apply: bool = False,
+        describe: Sequence[dict[str, Any]] | None = None,
+    ) -> MutationResult:
+        """Send many operations as ONE all-or-nothing request.
+
+        ``GoogleAdsService.mutate`` takes a list of ``MutateOperation`` and
+        applies them in a single transaction. Two things make it the right way
+        to build a campaign:
+
+        * **Temp resource names.** An operation can reference an entity created
+          earlier in the same request by a negative id --
+          ``customers/X/campaignBudgets/-1``. That is what lets a budget, a
+          campaign, an ad group and an ad be created together, before any of
+          them have real ids.
+        * **Nothing, or everything.** Sent one call at a time, a failure at the
+          ad step leaves a campaign and an ad group already created and billing
+          configured -- a half-built campaign someone has to find and clean up.
+          Here a failure anywhere means nothing was created at all.
+
+        ``partial_failure`` is deliberately NOT offered: partial success is the
+        exact outcome this method exists to prevent.
+        """
+        if not operations:
+            raise MutationError("No operations to send.")
+
+        target = self.resolve_customer_id(customer_id)
+        service = self.service("GoogleAdsService")
+        validate_only = not apply
+
+        correlation_id = self._audit.attempt(
+            customer_id=target,
+            service="GoogleAdsService",
+            method="mutate (atomic)",
+            operations=list(describe or []),
+            validate_only=validate_only,
+        )
+
+        request = self._raw.get_type("MutateGoogleAdsRequest")
+        request.customer_id = target
+        request.mutate_operations.extend(operations)
+        request.validate_only = validate_only
+        request.partial_failure = False
+
+        try:
+            response = service.mutate(request=request)
+        except Exception as exc:  # noqa: BLE001 - re-raised with context
+            failure = _describe_failure(exc, target, "mutate (atomic)")
+            self._audit.outcome(correlation_id, ok=False, error=str(failure))
+            raise failure from exc
+
+        resource_names = []
+        for item in getattr(response, "mutate_operation_responses", []):
+            for field in type(item).pb(item).ListFields():
+                result = getattr(item, field[0].name, None)
+                name = getattr(result, "resource_name", "")
+                if name:
+                    resource_names.append(name)
+
+        self._audit.outcome(
+            correlation_id,
+            ok=True,
+            resource_names=resource_names,
+            request_id=getattr(response, "request_id", None) or None,
+        )
+        return MutationResult(
+            validated_only=validate_only,
+            resource_names=resource_names,
+            request_id=getattr(response, "request_id", None) or None,
+        )
+
     # -- guardrails --------------------------------------------------------
 
     def check_daily_budget(self, amount: float, *, override: bool = False) -> None:
@@ -244,6 +322,7 @@ class MutatingGoogleAdsClient:
 
 
 _REQUEST_TYPES = {
+    "mutate_assets": "MutateAssetsRequest",
     "mutate_campaign_budgets": "MutateCampaignBudgetsRequest",
     "mutate_campaigns": "MutateCampaignsRequest",
     "mutate_ad_groups": "MutateAdGroupsRequest",

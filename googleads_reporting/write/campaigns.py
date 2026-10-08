@@ -187,6 +187,7 @@ def plan_create(
     status: str = "PAUSED",
     start_date: str | None = None,
     end_date: str | None = None,
+    contains_eu_political_advertising: bool = False,
 ) -> PlannedChange:
     """A new campaign.
 
@@ -200,6 +201,12 @@ def plan_create(
     campaign.status = getattr(client.enums.CampaignStatusEnum, status.upper())
     campaign.advertising_channel_type = getattr(
         client.enums.AdvertisingChannelTypeEnum, channel.upper()
+    )
+    # REQUIRED by the API on every new campaign.
+    campaign.contains_eu_political_advertising = (
+        client.enums.EuPoliticalAdvertisingStatusEnum.CONTAINS_EU_POLITICAL_ADVERTISING
+        if contains_eu_political_advertising
+        else client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     )
     campaign.campaign_budget = budget_resource_name
     # Manual CPC with no bid set is the least opinionated starting point; a
@@ -215,6 +222,10 @@ def plan_create(
         FieldChange("status", None, status.upper()),
         FieldChange("channel", None, channel.upper()),
         FieldChange("budget", None, budget_resource_name),
+        FieldChange(
+            "EU political advertising", None,
+            "CONTAINS" if contains_eu_political_advertising else "does not contain",
+        ),
     ]
     if start_date:
         changes.append(FieldChange("start_date", None, start_date))
