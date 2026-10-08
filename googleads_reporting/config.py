@@ -122,9 +122,14 @@ def oauth_project_number(client_id: str) -> str:
 class Settings:
     """Everything this package needs in order to talk to the API.
 
-    ``developer_token``, ``client_secret`` and ``refresh_token`` are secrets.
-    Nothing in this package prints, logs or serialises them; see
-    :meth:`describe`.
+    ``client_secret`` and ``refresh_token`` are secrets. Nothing in this
+    package prints, logs or serialises them; see :meth:`describe`.
+
+    ``developer_token`` is **legacy and optional**. Developer tokens were
+    sunset on 2026-09-09: the API ignores them, access is decided by the Cloud
+    project behind the OAuth client, and Google has said a future major version
+    will *reject* calls that still send one. It is read here only so a value
+    left over in ``.env`` can be reported as unused; it is never sent.
     """
 
     developer_token: str
@@ -146,10 +151,8 @@ class Settings:
             output_dir = PROJECT_ROOT / output_dir
 
         return cls(
-            developer_token=require(
-                "GOOGLE_ADS_DEVELOPER_TOKEN",
-                hint="Find it under Tools & Settings > Setup > API Center on the MCC.",
-            ),
+            # Not require(): sunset 2026-09-09 and no longer needed.
+            developer_token=env("GOOGLE_ADS_DEVELOPER_TOKEN"),
             client_id=require("GOOGLE_ADS_CLIENT_ID"),
             client_secret=require("GOOGLE_ADS_CLIENT_SECRET"),
             refresh_token=require(
@@ -173,8 +176,12 @@ class Settings:
         ``google-ads.yaml``, so the credentials exist in exactly one place on
         disk (``.env``) and nowhere else.
         """
+        # developer_token is deliberately absent. Google sunset it on
+        # 2026-09-09, the servers ignore it, and a future major version will
+        # reject calls that still carry one -- so sending it buys nothing and
+        # costs a future breakage. Verified against the live API: a query
+        # succeeds with no developer token in the payload at all.
         return {
-            "developer_token": self.developer_token,
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "refresh_token": self.refresh_token,
@@ -194,7 +201,11 @@ class Settings:
             return f"present ({len(value)} chars)" if value else "MISSING"
 
         return {
-            "developer_token": secret(self.developer_token),
+            "developer_token": (
+                "set but UNUSED (sunset 2026-09-09; not sent)"
+                if self.developer_token
+                else "not set (no longer required)"
+            ),
             "client_id": secret(self.client_id),
             # Not a secret, and the single most useful line here: the access
             # level belongs to THIS project, not to the developer token.

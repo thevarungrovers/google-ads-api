@@ -25,7 +25,6 @@ from googleads_reporting.config import (
 )
 
 REQUIRED = {
-    "GOOGLE_ADS_DEVELOPER_TOKEN": "dev-token-placeholder",
     "GOOGLE_ADS_CLIENT_ID": "client-id-placeholder.apps.googleusercontent.com",
     "GOOGLE_ADS_CLIENT_SECRET": "client-secret-placeholder",
     "GOOGLE_ADS_REFRESH_TOKEN": "refresh-token-placeholder",
@@ -34,6 +33,7 @@ REQUIRED = {
 
 ALL_KEYS = [
     *REQUIRED,
+    "GOOGLE_ADS_DEVELOPER_TOKEN",
     "GOOGLE_ADS_CUSTOMER_ID",
     "GOOGLE_ADS_API_VERSION",
     "GOOGLE_ADS_OUTPUT_DIR",
@@ -171,7 +171,6 @@ def test_google_ads_dict_has_the_keys_the_library_requires():
     payload = _settings().to_google_ads_dict()
     assert payload["use_proto_plus"] is True
     assert set(payload) == {
-        "developer_token",
         "client_id",
         "client_secret",
         "refresh_token",
@@ -179,6 +178,52 @@ def test_google_ads_dict_has_the_keys_the_library_requires():
         "use_proto_plus",
     }
     assert payload["login_customer_id"] == "1234567890"
+
+
+# --------------------------------------------------------------------------
+# Developer token: sunset 2026-09-09
+# --------------------------------------------------------------------------
+
+
+def test_the_developer_token_is_never_sent():
+    """Google sunset it; a future major version will REJECT calls carrying one.
+
+    Verified against the live API on 2026-10-08: a query succeeds with no
+    developer token in the payload at all.
+    """
+    payload = _settings(developer_token="legacy-token-value").to_google_ads_dict()
+    assert "developer_token" not in payload
+    assert "legacy-token-value" not in str(payload)
+
+
+def test_settings_load_without_a_developer_token(clean_env):
+    """It must not be a required key -- new setups will not have one."""
+    for key, value in REQUIRED.items():
+        clean_env.setenv(key, value)
+    clean_env.setenv("GOOGLE_ADS_DEVELOPER_TOKEN", "")
+
+    settings = Settings.from_env()
+
+    assert settings.developer_token == ""
+    assert "developer_token" not in settings.to_google_ads_dict()
+
+
+def test_a_leftover_developer_token_is_reported_as_unused(clean_env):
+    for key, value in REQUIRED.items():
+        clean_env.setenv(key, value)
+    clean_env.setenv("GOOGLE_ADS_DEVELOPER_TOKEN", "left-over-from-before")
+
+    described = Settings.from_env().describe()["developer_token"]
+
+    assert "UNUSED" in described
+    assert "2026-09-09" in described
+    assert "left-over-from-before" not in described
+
+
+def test_a_missing_developer_token_is_not_reported_as_a_problem():
+    described = _settings(developer_token="").describe()["developer_token"]
+    assert "no longer required" in described
+    assert "MISSING" not in described
 
 
 def test_describe_never_leaks_a_secret_value():
@@ -195,7 +240,6 @@ def test_describe_never_leaks_a_secret_value():
         assert secret[:4] not in rendered
         assert secret[-4:] not in rendered
 
-    assert settings.describe()["developer_token"] == "present (16 chars)"
     # Customer IDs are not secrets and should be legible for diagnostics.
     assert settings.describe()["login_customer_id"] == "1234567890"
 

@@ -10,8 +10,10 @@ a single failing report, which is the thing this script exists to separate:
 
   * constructing the client refreshes the OAuth token, so rung 3 proves the
     OAuth client and refresh token before anything else is involved.
-  * ``list_accessible_customers`` needs no customer ID, so it adds the
-    DEVELOPER TOKEN without implicating any account setting.
+  * ``list_accessible_customers`` needs no customer ID, so it proves the API
+    answers this identity without implicating any account setting. It does NOT
+    prove production access -- that check fires only on a real query, at rung
+    6. (Developer tokens were sunset on 2026-09-09 and are not sent.)
   * a query against the MCC proves GOOGLE_ADS_LOGIN_CUSTOMER_ID.
   * a query against the target proves GOOGLE_ADS_CUSTOMER_ID and that the MCC
     actually manages it.
@@ -187,32 +189,36 @@ def main(argv: list[str] | None = None) -> int:
     except ReadOnlyViolation:
         ladder.record(PASS, "4. read-only guard", "write surfaces refused")
 
-    # -- 5. the developer token -------------------------------------------
-    # The OAuth token already refreshed at rung 3 and no customer ID is sent
-    # here, so this rung isolates the developer token ITSELF.
+    # -- 5. the API answers at all ----------------------------------------
+    # No customer ID is sent here, so this proves the OAuth identity reaches
+    # the API and is recognised.
     #
-    # It does NOT prove the token can reach production accounts:
-    # list_accessible_customers succeeds on a Test-access project, and the
-    # access-level check only fires on a real query. That is why rung 6 tests
-    # for it rather than assuming a failure there is the MCC's fault.
+    # It does NOT prove production access. list_accessible_customers succeeds
+    # on a Cloud project restricted to Test, because the access-level check
+    # only fires on a real query -- which is why rung 6 tests for it rather
+    # than assuming a failure there is the MCC's fault.
+    #
+    # (Historically this rung tested the developer token. Those were sunset on
+    # 2026-09-09 and are no longer sent at all.)
     try:
         accessible = client.list_accessible_customers()
     except GoogleAdsReportingError as exc:
-        ladder.record(FAIL, "5. developer token recognised", _first_lines(exc))
+        ladder.record(FAIL, "5. API reachable with these credentials", _first_lines(exc))
         hint(
-            "The OAuth token already refreshed at rung 3, so this is the "
-            "DEVELOPER token itself -- it is missing, malformed or not "
-            "attached to this Cloud project. No customer ID was sent, so "
-            "account settings are not implicated."
+            "The OAuth token refreshed at rung 3, so the credentials are "
+            "good, but the API refused this identity. No customer ID was "
+            "sent, so account settings are not implicated -- check the Google "
+            "Ads API is enabled on Cloud project "
+            f"{oauth_project_number(settings.client_id)}."
         )
         return _finish(ladder)
     except Exception as exc:  # noqa: BLE001
-        ladder.record(FAIL, "5. developer token recognised", f"{type(exc).__name__}: {exc}")
+        ladder.record(FAIL, "5. API reachable with these credentials", f"{type(exc).__name__}: {exc}")
         return _finish(ladder)
 
     ladder.record(
         PASS,
-        "5. developer token recognised",
+        "5. API reachable with these credentials",
         f"{len(accessible)} directly accessible account(s): "
         + ", ".join(format_customer_id(cid) for cid in accessible)
         + " (does not prove production access -- see rung 6)",
