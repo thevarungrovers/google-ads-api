@@ -1,10 +1,10 @@
-"""Phase 2: mutations.
+"""Mutations: everything that can change an account.
 
 Everything in this subpackage can change a live advertising account. It is the
 **only** place in the repository allowed to call a ``mutate*`` method --
-``tests/test_readonly_guard.py`` scans every other file for them, so the Phase 1
-guarantee survives intact: ``ReadOnlyGoogleAdsClient`` still cannot write, and
-nothing outside this directory can either.
+``tests/test_readonly_guard.py`` scans every other file for them, so the
+read-only guarantee survives intact: ``ReadOnlyGoogleAdsClient`` still cannot
+write, and nothing outside this directory can either.
 
 Three habits make that guarantee worth something:
 
@@ -14,7 +14,7 @@ Three habits make that guarantee worth something:
   code guessed.
 * **Applying is explicit.** :meth:`MutatingGoogleAdsClient.mutate` does not
   write unless ``apply=True``. The CLI turns that into a typed confirmation;
-  Phase 3's agent layer will turn it into its own gate. The library never
+  an agent driving this library supplies its own gate. The library never
   assumes consent.
 * **Everything is logged.** Applied mutations append to an audit file before
   and after the call, so a change is reconstructable even if the process dies

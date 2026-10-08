@@ -1,6 +1,6 @@
 """The read-only Google Ads client.
 
-Phase 1 must not mutate anything. The OAuth scope
+This client must not mutate anything. The OAuth scope
 ``https://www.googleapis.com/auth/adwords`` has no read-only variant -- the
 token these credentials carry is perfectly capable of changing the account --
 so the restriction has to live here, in code.
@@ -15,15 +15,15 @@ Three layers enforce it:
    ``mutate`` method, so allowlisting the *service* alone would leave the write
    path one attribute access away.
 3. ``tests/test_readonly_guard.py`` greps the whole source tree for a
-   ``.mutate*(`` call, so Phase 2 has to opt in deliberately rather than by
-   someone reaching past this module.
+   ``.mutate*(`` call, so a write has to be added deliberately, inside that
+   package, rather than by someone reaching past this module.
 
-**Adding mutate support in Phase 2:** do not loosen the sets above. Reuse
-:func:`build_raw_client`, which is the only place credentials become a client,
-and put the write path in a new sibling module with its own allowlist and its
-own confirmation prompt. The read-only guarantee of this module then still
-means something, and the guard test keeps covering everything outside the new
-module.
+**Mutations live in** :mod:`googleads_reporting.write`, a sibling package with
+its own allowlist and its own confirmation step, which reuses
+:func:`build_raw_client` rather than constructing a second client. Keep it that
+way: loosening the sets below to add a write here would end the guarantee this
+module exists to make, and the guard test covers everything outside that one
+package.
 """
 
 from __future__ import annotations
@@ -38,10 +38,10 @@ from .customer_id import normalize_customer_id
 from .query import Query, assert_select_only, parse_select
 from .fields import row_to_dict
 
-#: The only services Phase 1 may construct.
+#: The only services this client may construct.
 ALLOWED_SERVICES = frozenset({"GoogleAdsService", "CustomerService"})
 
-#: The only methods Phase 1 may call on them. Note that GoogleAdsService also
+#: The only methods it may call on them. Note that GoogleAdsService also
 #: offers `mutate`, which is exactly what this set exists to keep out.
 ALLOWED_METHODS = frozenset({"search", "search_stream", "list_accessible_customers"})
 
@@ -66,8 +66,8 @@ class _ReadOnlyService:
     def __getattr__(self, attribute: str) -> Any:
         if attribute not in ALLOWED_METHODS:
             raise ReadOnlyViolation(
-                f"{self._name}.{attribute} is not permitted in Phase 1 "
-                f"(read-only). Allowed: {', '.join(sorted(ALLOWED_METHODS))}."
+                f"{self._name}.{attribute} is not permitted on the read-only "
+                f"client. Allowed: {', '.join(sorted(ALLOWED_METHODS))}."
             )
         return getattr(self._service, attribute)
 
@@ -78,9 +78,9 @@ class _ReadOnlyService:
 def build_raw_client(settings: Settings) -> GoogleAdsClient:
     """Construct the underlying library client from ``settings``.
 
-    The single place credentials become a client. Phase 2 should call this too
-    rather than re-reading config, so there stays exactly one construction path
-    to audit.
+    The single place credentials become a client. The write package calls this
+    too rather than re-reading config, so there stays exactly one construction
+    path to audit.
 
     **This performs a network call.** ``load_from_dict`` refreshes the OAuth
     token eagerly, so a bad client ID, client secret or refresh token raises
@@ -129,7 +129,7 @@ class ReadOnlyGoogleAdsClient:
         """Return an allowlisted service, wrapped so only read methods exist."""
         if name not in ALLOWED_SERVICES:
             raise ReadOnlyViolation(
-                f"{name} is not permitted in Phase 1 (read-only). "
+                f"{name} is not permitted on the read-only client. "
                 f"Allowed services: {', '.join(sorted(ALLOWED_SERVICES))}."
             )
         return _ReadOnlyService(self._raw.get_service(name), name)

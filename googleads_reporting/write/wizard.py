@@ -2,8 +2,9 @@
 
 This is a frontend, not the only way in. It asks questions and returns a spec;
 everything that validates, builds and sends is reachable without it. That
-matters for Phase 3, where an agent has no terminal to answer a prompt but can
-construct the same spec directly and reuse every check.
+matters for anything driving this without a terminal -- an agent has no way to
+answer a prompt, but can construct the same spec directly and reuse every
+check.
 
 Answering is never assumed: EOF or an interrupt aborts rather than accepting a
 default, because a wizard that treats "no answer" as "yes" is a wizard that

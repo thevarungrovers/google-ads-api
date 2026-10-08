@@ -2,9 +2,9 @@
 
 The interactive prompts build one of these; so can any caller. Keeping the
 description separate from both the asking and the sending means the wizard is a
-frontend rather than the only way in -- Phase 3's agent layer can construct a
-:class:`CampaignSpec` directly and reuse every check below without going near a
-terminal prompt.
+frontend rather than the only way in -- anything driving this library can
+construct a :class:`CampaignSpec` directly and reuse every check below without
+going near a terminal prompt.
 
 Nothing here touches the API or reads a file. :mod:`.builder` turns a spec into
 operations.

@@ -1,8 +1,11 @@
-"""Read-only enforcement tests.
+"""Tests for the boundary between reading and writing.
 
 The OAuth scope this project uses (`.../auth/adwords`) has no read-only
 variant: the token is fully capable of changing the account. Nothing outside
 this repo stops a write, so these tests are the enforcement.
+
+The invariant: everything that can mutate lives in
+`googleads_reporting/write/`, and no other source file can.
 """
 
 import ast
@@ -61,8 +64,9 @@ def mutate_hits(source: str) -> list[tuple[int, str]]:
     * A comment mentioning ``.mutate()`` produced a false hit, so the old scan
       needed a "skip lines starting with # or a quote" heuristic...
     * ...and that heuristic then hid a REAL hit, because a dispatch-table entry
-      ``"mutate_campaigns": ...`` is a line starting with a quote. The Phase 2
-      client is written exactly that way, which is how the gap surfaced.
+      ``"mutate_campaigns": ...`` is a line starting with a quote. The
+      mutating client dispatches exactly that way, which is how the gap
+      surfaced.
 
     The AST has neither problem: comments are not in it, docstrings are
     identified precisely, and a dict key is just a string constant.
@@ -95,9 +99,9 @@ def mutate_hits(source: str) -> list[tuple[int, str]]:
     return sorted(set(hits))
 
 
-#: The ONE directory allowed to mutate. Phase 2 lives here; everything else in
-#: the repository is still held to the Phase 1 guarantee. Widening this tuple is
-#: the deliberate act that enlarges the write surface -- it is not a formality.
+#: The ONE directory allowed to mutate. Everything else in the repository is
+#: held to read-only. Widening this tuple is the deliberate act that enlarges
+#: the write surface -- it is not a formality.
 WRITE_SURFACE = (PROJECT_ROOT / "googleads_reporting" / "write",)
 
 
@@ -144,7 +148,8 @@ def test_the_write_surface_really_does_mutate():
                 found.append(f"{path.name}:{line}: {what}")
     assert found, (
         "write/ makes no mutate call, so excluding it from the scan proves "
-        "nothing. Either Phase 2 is not wired up, or the scan is misconfigured."
+        "nothing. Either the write package is not wired up, or the scan is "
+        "misconfigured."
     )
 
 
@@ -165,7 +170,8 @@ def test_no_mutate_call_anywhere_in_the_source_tree():
         for line, what in mutate_hits(path.read_text()):
             offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{line}: {what}")
     assert offenders == [], (
-        "Phase 1 is read-only. Found mutate call(s):\n" + "\n".join(offenders)
+        "Only googleads_reporting/write/ may mutate. Found mutate call(s) "
+        "outside it:\n" + "\n".join(offenders)
     )
 
 
@@ -426,11 +432,11 @@ def test_the_wrapped_object_really_is_the_generated_service(real_client):
 
 
 # --------------------------------------------------------------------------
-# Phase 2 must not reach back into Phase 1
+# The write package must not reach back into the read-only one
 # --------------------------------------------------------------------------
 
 
-def test_the_read_only_client_gained_nothing_from_phase_2():
+def test_the_read_only_client_gained_nothing_from_the_write_package():
     """Importing the write package must not alter the read-only surface."""
     import googleads_reporting.write  # noqa: F401
 
@@ -460,7 +466,7 @@ def test_the_read_only_module_does_not_import_the_write_package():
 
 
 def test_the_write_package_reuses_the_single_client_factory():
-    """Phase 2 must not grow a second place where credentials become a client."""
+    """The write package must not grow a second place to build a client."""
     source = (
         PROJECT_ROOT / "googleads_reporting" / "write" / "client.py"
     ).read_text()
@@ -511,7 +517,7 @@ def test_a_non_select_query_is_refused_before_any_request(client):
 
 
 def test_build_raw_client_is_the_only_construction_path():
-    """Phase 2 must reuse this rather than re-reading config elsewhere.
+    """The write package must reuse this rather than re-reading config.
 
     Counts the CALL, not the bare name, so prose mentioning load_from_dict
     does not trip it.

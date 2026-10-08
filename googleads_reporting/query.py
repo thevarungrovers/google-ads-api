@@ -1,7 +1,8 @@
 """GAQL query construction.
 
 GAQL has no mutating form -- the grammar only admits ``SELECT`` -- so building
-queries here keeps Phase 1 read-only by construction rather than by convention.
+queries here keeps the reporting path read-only by construction rather than
+by convention.
 :meth:`Query.to_gaql` emits nothing else, and :func:`assert_select_only` is the
 belt-and-braces check for a query string that arrived from somewhere else.
 """
@@ -44,12 +45,12 @@ def assert_select_only(gaql: str) -> str:
         raise QueryError("Query is empty.")
     if not stripped[:6].upper() == "SELECT":
         raise QueryError(
-            f"Only SELECT queries are allowed in Phase 1; got {stripped[:40]!r}."
+            f"Only SELECT queries are allowed here; got {stripped[:40]!r}."
         )
     found = _FORBIDDEN.search(stripped)
     if found:
         raise QueryError(
-            f"Only SELECT queries are allowed in Phase 1; found "
+            f"Only SELECT queries are allowed here; found "
             f"{found.group(0).upper()!r} in the query."
         )
     if ";" in stripped.rstrip(";"):

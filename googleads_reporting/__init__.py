@@ -1,10 +1,12 @@
-"""Read-only Google Ads API reporting.
+"""Google Ads API reporting and campaign management.
 
-Phase 1 is read-only by construction: the only API surface this package exposes
-is ``GoogleAdsService.search`` / ``search_stream`` and
+This package is read-only by construction: the only API surface it exposes is
+``GoogleAdsService.search`` / ``search_stream`` and
 ``CustomerService.list_accessible_customers``. See
-:mod:`googleads_reporting.client` for how that is enforced, and for the seam
-Phase 2 should add mutate support behind.
+:mod:`googleads_reporting.client` for how that is enforced.
+
+Everything that can change an account lives in
+:mod:`googleads_reporting.write`, deliberately behind a separate import.
 """
 
 __all__ = ["__version__"]

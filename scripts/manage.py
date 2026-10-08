@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Phase 2: change the account, with a confirmation step.
+"""Create and change campaigns, budgets, ad groups and ads.
 
     ./.venv/bin/python scripts/manage.py campaign pause --campaign-id 123
     ./.venv/bin/python scripts/manage.py campaign enable --name "My campaign"
