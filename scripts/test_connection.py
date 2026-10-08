@@ -40,6 +40,40 @@ from googleads_reporting.reports import get_report  # noqa: E402
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
+#: Markers for "your Cloud project may only touch test accounts". This failure
+#: arrives on a QUERY, not on list_accessible_customers, so it surfaces at rung
+#: 6 or later and reads like a wrong-customer-ID problem. It is not.
+ACCESS_LEVEL_MARKERS = (
+    "only approved for use with test accounts",
+    "developer_token_not_approved",
+)
+
+ACCESS_LEVEL_HINT = """The credentials are fine. The Cloud project is at TEST access, which can
+  only reach test accounts -- nothing in .env is wrong.
+
+  Apply for Explorer (usually auto-approved; 2,880 production ops/day):
+    - Google Ads UI, on the MCC: Tools & Settings > Setup > API Center, or
+    - https://console.cloud.google.com/google/ads-apis/overview
+      > Upgrade access level
+
+  Re-run this script once the upgrade lands."""
+
+
+def _is_access_level_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ACCESS_LEVEL_MARKERS)
+
+
+def hint(text: str) -> None:
+    """Print an explanation under the ladder.
+
+    Deliberately stdout, not stderr: stdout is block-buffered when piped, so a
+    stderr hint jumps ahead of the whole ladder and ends up above the rung it
+    explains. One stream keeps the order honest. The exit code still carries
+    the pass/fail signal.
+    """
+    print(f"\n  {text}")
+
 
 class Ladder:
     """Collects rung results and prints them as it goes."""
@@ -141,29 +175,33 @@ def main(argv: list[str] | None = None) -> int:
 
     # -- 5. the developer token -------------------------------------------
     # The OAuth token already refreshed at rung 3 and no customer ID is sent
-    # here, so this rung isolates the developer token.
+    # here, so this rung isolates the developer token ITSELF.
+    #
+    # It does NOT prove the token can reach production accounts:
+    # list_accessible_customers succeeds on a Test-access project, and the
+    # access-level check only fires on a real query. That is why rung 6 tests
+    # for it rather than assuming a failure there is the MCC's fault.
     try:
         accessible = client.list_accessible_customers()
     except GoogleAdsReportingError as exc:
-        ladder.record(FAIL, "5. developer token valid", _first_lines(exc))
-        print(
-            "\n  The OAuth token already refreshed at rung 3, so this is the "
-            "DEVELOPER token. A new one has Test Account access only and "
-            "returns DEVELOPER_TOKEN_NOT_APPROVED -- apply for Basic access in "
-            "the API Center. No customer ID was sent, so account settings are "
-            "not implicated.",
-            file=sys.stderr,
+        ladder.record(FAIL, "5. developer token recognised", _first_lines(exc))
+        hint(
+            "The OAuth token already refreshed at rung 3, so this is the "
+            "DEVELOPER token itself -- it is missing, malformed or not "
+            "attached to this Cloud project. No customer ID was sent, so "
+            "account settings are not implicated."
         )
         return _finish(ladder)
     except Exception as exc:  # noqa: BLE001
-        ladder.record(FAIL, "5. developer token valid", f"{type(exc).__name__}: {exc}")
+        ladder.record(FAIL, "5. developer token recognised", f"{type(exc).__name__}: {exc}")
         return _finish(ladder)
 
     ladder.record(
         PASS,
-        "5. developer token valid",
+        "5. developer token recognised",
         f"{len(accessible)} directly accessible account(s): "
-        + ", ".join(format_customer_id(cid) for cid in accessible),
+        + ", ".join(format_customer_id(cid) for cid in accessible)
+        + " (does not prove production access -- see rung 6)",
     )
 
     # -- 6. the MCC --------------------------------------------------------
@@ -174,12 +212,15 @@ def main(argv: list[str] | None = None) -> int:
         )
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "6. MCC reachable", _first_lines(exc))
-        print(
-            f"\n  GOOGLE_ADS_LOGIN_CUSTOMER_ID ({format_customer_id(mcc)}) is "
-            "rejected, but the credentials themselves work. Check it is the "
-            "manager account's ID and that this user has access to it.",
-            file=sys.stderr,
-        )
+        if _is_access_level_error(exc):
+            hint(ACCESS_LEVEL_HINT)
+        else:
+            hint(
+                f"GOOGLE_ADS_LOGIN_CUSTOMER_ID "
+                f"({format_customer_id(mcc)}) is rejected, but the "
+                "credentials themselves work. Check it is the manager "
+                "account's ID and that this user has access to it."
+            )
         return _finish(ladder)
 
     ladder.record(
@@ -220,12 +261,14 @@ def main(argv: list[str] | None = None) -> int:
         info = client.rows(probe, customer_id=target)
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "7. target account reachable", _first_lines(exc))
-        print(
-            f"\n  The credentials and the MCC both work, so the problem is "
-            f"{format_customer_id(target)} specifically: check it is managed "
-            "by this MCC and is not cancelled.",
-            file=sys.stderr,
-        )
+        if _is_access_level_error(exc):
+            hint(ACCESS_LEVEL_HINT)
+        else:
+            hint(
+                "The credentials and the MCC both work, so the problem is "
+                f"{format_customer_id(target)} specifically: check it is "
+                "managed by this MCC and is not cancelled."
+            )
         return _finish(ladder)
 
     if not info:
@@ -250,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except GoogleAdsReportingError as exc:
         ladder.record(FAIL, "8. campaigns report runs", _first_lines(exc))
+        if _is_access_level_error(exc):
+            hint(ACCESS_LEVEL_HINT)
         return _finish(ladder)
 
     if not sample:
