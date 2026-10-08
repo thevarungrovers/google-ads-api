@@ -214,6 +214,73 @@ def test_allowlisted_methods_pass_through(client, method):
     assert callable(getattr(service, method))
 
 
+# --------------------------------------------------------------------------
+# The guard against the REAL generated services
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_client(settings):
+    """A ReadOnlyGoogleAdsClient over a REAL GoogleAdsClient, offline.
+
+    Constructing GoogleAdsClient directly skips the eager OAuth refresh that
+    load_from_dict performs, so this needs no credentials and no network --
+    while still handing back the real generated service classes. The fake above
+    can only confirm the guard's own logic; this confirms it against the
+    objects it will actually wrap.
+    """
+    from google.ads.googleads.client import GoogleAdsClient
+    from google.oauth2.credentials import Credentials
+
+    raw = GoogleAdsClient(
+        credentials=Credentials(token="offline-placeholder"),
+        developer_token="placeholder",
+        login_customer_id=settings.login_customer_id,
+        version=settings.api_version,
+        use_proto_plus=True,
+    )
+    return ReadOnlyGoogleAdsClient(raw, settings)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "CampaignService",
+        "AdGroupAdService",
+        "CampaignBudgetService",
+        "ConversionUploadService",
+        "CustomerClientLinkService",
+    ],
+)
+def test_real_write_services_are_refused(real_client, name):
+    with pytest.raises(ReadOnlyViolation, match=name):
+        real_client._service(name)
+
+
+@pytest.mark.parametrize(
+    "attribute", ["mutate", "_client", "transport", "common_billing_setup_path"]
+)
+def test_real_non_read_attributes_are_refused(real_client, attribute):
+    service = real_client._service("GoogleAdsService")
+    with pytest.raises(ReadOnlyViolation):
+        getattr(service, attribute)
+
+
+def test_real_read_methods_remain_reachable(real_client):
+    google_ads = real_client._service("GoogleAdsService")
+    assert callable(google_ads.search)
+    assert callable(google_ads.search_stream)
+    customer = real_client._service("CustomerService")
+    assert callable(customer.list_accessible_customers)
+
+
+def test_the_wrapped_object_really_is_the_generated_service(real_client):
+    """Otherwise the test above could be passing over a stub."""
+    service = real_client._service("GoogleAdsService")
+    assert type(service._service).__name__ == "GoogleAdsServiceClient"
+    assert hasattr(service._service, "mutate")
+
+
 def test_allowlists_have_not_drifted():
     """Pins the contract. Widening either set must be a deliberate edit here."""
     assert ALLOWED_SERVICES == {"GoogleAdsService", "CustomerService"}
@@ -257,7 +324,12 @@ def test_a_non_select_query_is_refused_before_any_request(client):
 
 
 def test_build_raw_client_is_the_only_construction_path():
-    """Phase 2 must reuse this rather than re-reading config elsewhere."""
+    """Phase 2 must reuse this rather than re-reading config elsewhere.
+
+    Counts the CALL, not the bare name, so prose mentioning load_from_dict
+    does not trip it.
+    """
     source = (PROJECT_ROOT / "googleads_reporting" / "client.py").read_text()
-    assert source.count("load_from_dict") == 1
+    calls = re.findall(r"GoogleAdsClient\.load_from_dict\s*\(", source)
+    assert len(calls) == 1, calls
     assert "def build_raw_client" in source

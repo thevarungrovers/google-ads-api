@@ -81,6 +81,13 @@ def build_raw_client(settings: Settings) -> GoogleAdsClient:
     The single place credentials become a client. Phase 2 should call this too
     rather than re-reading config, so there stays exactly one construction path
     to audit.
+
+    **This performs a network call.** ``load_from_dict`` refreshes the OAuth
+    token eagerly, so a bad client ID, client secret or refresh token raises
+    ``google.auth.exceptions.RefreshError`` here, at construction, rather than
+    on the first query. ``scripts/test_connection.py`` relies on that: the rung
+    that constructs the client is already the rung that validates the OAuth
+    credentials.
     """
     return GoogleAdsClient.load_from_dict(
         settings.to_google_ads_dict(), version=settings.api_version

@@ -8,8 +8,10 @@ every rung assumes the ones above it passed, so the FIRST failure names the
 real problem. A credential error and a wrong-account error look identical from
 a single failing report, which is the thing this script exists to separate:
 
-  * ``list_accessible_customers`` needs no customer ID, so it proves the
-    CREDENTIALS on their own.
+  * constructing the client refreshes the OAuth token, so rung 3 proves the
+    OAuth client and refresh token before anything else is involved.
+  * ``list_accessible_customers`` needs no customer ID, so it adds the
+    DEVELOPER TOKEN without implicating any account setting.
   * a query against the MCC proves GOOGLE_ADS_LOGIN_CUSTOMER_ID.
   * a query against the target proves GOOGLE_ADS_CUSTOMER_ID and that the MCC
     actually manages it.
@@ -94,13 +96,32 @@ def main(argv: list[str] | None = None) -> int:
     for key, value in settings.describe().items():
         print(f"         {key:20s} {value}")
 
-    # -- 3. client construction -------------------------------------------
+    # -- 3. client construction (and the OAuth token refresh) -------------
+    # load_from_dict refreshes the OAuth token eagerly, so this rung is where a
+    # bad client ID, client secret or refresh token surfaces -- not later, on
+    # the first query. It does NOT yet involve the developer token or any
+    # customer ID, so a failure here is narrowly the OAuth credentials.
     try:
         client = ReadOnlyGoogleAdsClient.from_env(settings=settings)
     except Exception as exc:  # noqa: BLE001
-        ladder.record(FAIL, "3. client constructed", f"{type(exc).__name__}: {exc}")
+        ladder.record(
+            FAIL,
+            "3. OAuth credentials accepted",
+            f"{type(exc).__name__}: {exc}",
+        )
+        print(
+            "\n  The client ID, client secret or refresh token is wrong or "
+            "revoked. 'invalid_client' means the ID/secret pair; "
+            "'invalid_grant' means the refresh token -- re-run "
+            "scripts/generate_refresh_token.py.",
+            file=sys.stderr,
+        )
         return _finish(ladder)
-    ladder.record(PASS, "3. client constructed", f"API {settings.api_version}")
+    ladder.record(
+        PASS,
+        "3. OAuth credentials accepted",
+        f"token refreshed; API {settings.api_version}",
+    )
 
     # -- 4. the read-only guard -------------------------------------------
     # Checked before any network call: if the guard is broken, stop before
@@ -118,26 +139,29 @@ def main(argv: list[str] | None = None) -> int:
     except ReadOnlyViolation:
         ladder.record(PASS, "4. read-only guard", "write surfaces refused")
 
-    # -- 5. credentials ----------------------------------------------------
-    # No customer ID involved, so a failure here is the credentials themselves.
+    # -- 5. the developer token -------------------------------------------
+    # The OAuth token already refreshed at rung 3 and no customer ID is sent
+    # here, so this rung isolates the developer token.
     try:
         accessible = client.list_accessible_customers()
     except GoogleAdsReportingError as exc:
-        ladder.record(FAIL, "5. credentials valid", _first_lines(exc))
+        ladder.record(FAIL, "5. developer token valid", _first_lines(exc))
         print(
-            "\n  The developer token, OAuth client or refresh token is the "
-            "problem -- no customer ID was sent, so the account settings are "
+            "\n  The OAuth token already refreshed at rung 3, so this is the "
+            "DEVELOPER token. A new one has Test Account access only and "
+            "returns DEVELOPER_TOKEN_NOT_APPROVED -- apply for Basic access in "
+            "the API Center. No customer ID was sent, so account settings are "
             "not implicated.",
             file=sys.stderr,
         )
         return _finish(ladder)
     except Exception as exc:  # noqa: BLE001
-        ladder.record(FAIL, "5. credentials valid", f"{type(exc).__name__}: {exc}")
+        ladder.record(FAIL, "5. developer token valid", f"{type(exc).__name__}: {exc}")
         return _finish(ladder)
 
     ladder.record(
         PASS,
-        "5. credentials valid",
+        "5. developer token valid",
         f"{len(accessible)} directly accessible account(s): "
         + ", ".join(format_customer_id(cid) for cid in accessible),
     )
