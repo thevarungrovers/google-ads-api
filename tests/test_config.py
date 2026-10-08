@@ -20,6 +20,7 @@ from googleads_reporting.config import (
     bool_env,
     env,
     int_env,
+    oauth_project_number,
     require,
 )
 
@@ -213,3 +214,42 @@ def test_resolve_customer_id_prefers_the_override():
 def test_resolve_customer_id_raises_when_nothing_is_configured():
     with pytest.raises(ConfigError, match="--customer-id"):
         _settings(customer_id=None).resolve_customer_id()
+
+
+# --------------------------------------------------------------------------
+# OAuth Cloud project number
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "client_id, expected",
+    [
+        ("960632522930-abc123.apps.googleusercontent.com", "960632522930"),
+        ("1-x.apps.googleusercontent.com", "1"),
+        # Malformed or placeholder values must not produce a confident wrong
+        # answer -- a bogus project number sends someone to the wrong console.
+        ("no-digits-here.apps.googleusercontent.com", "(unknown)"),
+        ("malformed", "(unknown)"),
+        ("", "(unknown)"),
+        ("-leading.apps.googleusercontent.com", "(unknown)"),
+    ],
+)
+def test_oauth_project_number_is_parsed_from_the_client_id(client_id, expected):
+    assert oauth_project_number(client_id) == expected
+
+
+def test_settings_exposes_the_oauth_project():
+    settings = _settings(client_id="960632522930-abc.apps.googleusercontent.com")
+    assert settings.oauth_project == "960632522930"
+
+
+def test_describe_includes_the_oauth_project_in_full():
+    """It is not a secret, and a mismatch is invisible unless it is shown."""
+    settings = _settings(client_id="960632522930-abc.apps.googleusercontent.com")
+    assert settings.describe()["oauth_cloud_project"] == "960632522930"
+
+
+def test_describe_still_masks_the_client_id_itself():
+    settings = _settings(client_id="960632522930-SECRETPART.apps.googleusercontent.com")
+    rendered = " ".join(settings.describe().values())
+    assert "SECRETPART" not in rendered

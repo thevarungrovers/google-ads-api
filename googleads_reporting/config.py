@@ -93,6 +93,31 @@ def bool_env(name: str, default: bool) -> bool:
     raise ConfigError(f"{name} must be a boolean, got {raw!r}.")
 
 
+def oauth_project_number(client_id: str) -> str:
+    """The Cloud project number embedded in an OAuth client ID.
+
+    A client ID is ``<project_number>-<random>.apps.googleusercontent.com``.
+
+    This matters more than it looks: the Google Ads API access level
+    (Test/Explorer/Basic/Standard) attaches to the CLOUD PROJECT that issued
+    the OAuth client, not to the developer token. Upgrade one project, take the
+    client ID from another, and every production query is refused while the
+    Google Ads UI still shows the token at Explorer. Surfacing this number lets
+    the mismatch be spotted before it is debugged.
+
+    It is not a secret.
+
+    >>> oauth_project_number("960632522930-abc.apps.googleusercontent.com")
+    '960632522930'
+    >>> oauth_project_number("malformed")
+    '(unknown)'
+    """
+    if "-" not in client_id:
+        return "(unknown)"
+    prefix = client_id.split("-", 1)[0]
+    return prefix if prefix.isdigit() else "(unknown)"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Everything this package needs in order to talk to the API.
@@ -171,6 +196,9 @@ class Settings:
         return {
             "developer_token": secret(self.developer_token),
             "client_id": secret(self.client_id),
+            # Not a secret, and the single most useful line here: the access
+            # level belongs to THIS project, not to the developer token.
+            "oauth_cloud_project": self.oauth_project,
             "client_secret": secret(self.client_secret),
             "refresh_token": secret(self.refresh_token),
             "login_customer_id": self.login_customer_id,
@@ -178,6 +206,11 @@ class Settings:
             "api_version": self.api_version,
             "output_dir": str(self.output_dir),
         }
+
+    @property
+    def oauth_project(self) -> str:
+        """Cloud project number behind ``client_id``. See the module function."""
+        return oauth_project_number(self.client_id)
 
     def resolve_customer_id(self, override: str | None = None) -> str:
         """Pick the account to report on: ``override`` first, else the default."""

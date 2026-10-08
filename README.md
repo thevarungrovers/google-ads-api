@@ -30,6 +30,13 @@ Always run through `./.venv/bin/python`, never the system `python3`.
 Four things, from two different places. The Cloud Console gives you the OAuth
 client; the Google Ads UI gives you the developer token and the account IDs.
 
+> **Do the whole of step 1 in ONE Cloud project, and note which one.**
+> The API access level attaches to the Cloud project that issued your OAuth
+> client — not to the developer token. Using a client from project A while
+> project B holds the approval means every production query is refused, while
+> the Google Ads UI cheerfully shows your token at Explorer. Step 1f is the
+> check; doing it now costs a minute and saves an hour.
+
 | Value | From |
 |---|---|
 | OAuth client ID + secret | Google Cloud Console (steps 1a–1d below) |
@@ -94,6 +101,10 @@ app (**Audience → Publish app**).
 3. Name it, **Create**, then copy the **client ID** and **client secret** into
    `.env`. You can reopen the client later to see both again, so losing them is
    recoverable.
+4. **Note the project number** — it is the part of the client ID before the
+   first `-`, e.g. `960632522930-abc….apps.googleusercontent.com` →
+   `960632522930`. Step 1f needs it. This is the project that must hold the
+   access level, regardless of which project you were looking at elsewhere.
 
 #### 1e. Get the developer token
 
@@ -102,34 +113,47 @@ app (**Audience → Publish app**).
    users with admin access on the manager account.
 2. Copy the developer token.
 
-#### 1f. Raise the access level — on the right Cloud project
+#### 1f. Raise the access level — on the project that issued your client
 
-**The access level belongs to the Cloud project your OAuth client came from,
-not to the developer token.** This trips people up: you can hold Explorer
-access and still be refused, because the `GOOGLE_ADS_CLIENT_ID` in `.env` was
-issued by a *different* project than the one you upgraded. A project that is
-not approved silently falls back to **Test**, which reaches test accounts only
-and fails on a real account with:
+**Do this before your first call, not after it fails.** A new Cloud project is
+at **Test** access, which reaches test accounts only. Against a real account
+every query is refused with:
 
 > The Google Cloud project is only approved for use with test accounts.
+> (`authorization_error=32`, or `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`)
 
-The project number is the part of the client ID before the first `-`
-(`960632522930-abc….apps.googleusercontent.com` → `960632522930`). Check *that*
-project:
+The trap is that this says nothing about *which* project, and the Google Ads UI
+will happily show your developer token at Explorer the whole time — because the
+level belongs to the **Cloud project**, not the token. Upgrading the wrong
+project looks exactly like having upgraded.
+
+Once `.env` has a client ID, print the project that actually matters:
+
+```bash
+./.venv/bin/python -c "from googleads_reporting.config import Settings; \
+print(Settings.from_env().oauth_project)"
+```
+
+(`scripts/test_connection.py` prints it as `oauth_cloud_project` on every run
+too.) Then open that exact project:
 
 ```
 https://console.cloud.google.com/google/ads-apis/overview?project=<PROJECT_NUMBER>
 ```
 
-Apply for the upgrade there. The **API Center** in the Google Ads UI is the
-legacy route and will not lift a Cloud project's restriction.
+- Shows **Test** → apply for Explorer here. Usually auto-approved.
+- Shows **Explorer** or better → you are done; the level is on the right
+  project.
 
-If you would rather keep an approved project you already have, create a new
-OAuth client inside it (step 1d), put that ID and secret in `.env`, and re-run
+The **API Center** in the Google Ads UI is the legacy route and cannot lift a
+Cloud project's restriction.
+
+Prefer to reuse a project that is already approved? Create a new OAuth client
+inside *it* (step 1d), put that ID and secret in `.env`, and re-run
 `scripts/generate_refresh_token.py` — a refresh token is bound to the client
-that issued it.
+that issued it, so the old one will not carry over.
 
-The tiers:
+The tiers (per Cloud project):
 
 | Level | Reaches | Production ops/day |
 |---|---|---|
@@ -185,8 +209,8 @@ separates three failures that look identical from a single broken report:
 | 1–2 | `.env` exists, is `600`, every required key is set | a missing or blank key |
 | 3 | **the OAuth client and refresh token** | `invalid_client` = wrong ID/secret; `invalid_grant` = revoked or expired refresh token |
 | 4 | the read-only guard refuses write surfaces | checked *before* any live account is touched |
-| 5 | **the developer token** — no customer ID is sent | token is Test-level, or wrong |
-| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the MCC is reachable | wrong MCC ID, or this user has no access to it |
+| 5 | **the developer token** is recognised — no customer ID is sent | token missing or malformed. Note this call is *exempt* from the access-level check, so passing here does **not** prove production access |
+| 6 | `GOOGLE_ADS_LOGIN_CUSTOMER_ID` — the MCC is reachable | wrong MCC ID, no access to it, **or the Cloud project is at Test access (§1f)** — the first real query is where that surfaces |
 | 7 | `GOOGLE_ADS_CUSTOMER_ID` — the target is reachable | wrong account, or the MCC does not manage it |
 | 8 | a real report runs end to end | |
 

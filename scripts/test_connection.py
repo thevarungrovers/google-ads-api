@@ -33,7 +33,12 @@ from googleads_reporting.client import (  # noqa: E402
     ReadOnlyGoogleAdsClient,
     ReadOnlyViolation,
 )
-from googleads_reporting.config import ENV_PATH, ConfigError, Settings  # noqa: E402
+from googleads_reporting.config import (  # noqa: E402
+    ENV_PATH,
+    ConfigError,
+    Settings,
+    oauth_project_number,
+)
 from googleads_reporting.customer_id import format_customer_id  # noqa: E402
 from googleads_reporting.query import Query  # noqa: E402
 from googleads_reporting.reports import get_report  # noqa: E402
@@ -66,16 +71,6 @@ ACCESS_LEVEL_HINT = """The credentials are fine. Nothing in .env is wrong.
   .env and re-run scripts/generate_refresh_token.py.
 
   Re-run this script once the upgrade lands."""
-
-
-def oauth_project_number(client_id: str) -> str:
-    """The Cloud project number embedded in an OAuth client ID.
-
-    A client ID is '<project_number>-<random>.apps.googleusercontent.com'.
-    The project number is not a secret, and it is the one value that has to
-    match the project holding the approved access level.
-    """
-    return client_id.split("-", 1)[0] if "-" in client_id else "YOUR_PROJECT"
 
 
 def _is_access_level_error(exc: Exception) -> bool:
