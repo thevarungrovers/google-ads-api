@@ -5,6 +5,7 @@ variant: the token is fully capable of changing the account. Nothing outside
 this repo stops a write, so these tests are the enforcement.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -27,18 +28,124 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Source-tree scan
 # --------------------------------------------------------------------------
 
-#: `.mutate(`, `.mutate_campaigns(`, `.mutateAll(` -- any mutate call at all.
-MUTATE_CALL = re.compile(r"\.\s*mutate\w*\s*\(")
+#: Any attribute or string that names a mutate method.
+MUTATE_NAME = re.compile(r"^mutate_?\w*$")
 
-#: Lines that legitimately contain the word while documenting the ban.
-_ALLOWED_CONTEXT = re.compile(r"^\s*(#|\*|\"|'|$)")
+
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """ids of Constant nodes that are docstrings, not code."""
+    found = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or not body:
+            continue
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)):
+            continue
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            found.add(id(first.value))
+    return found
+
+
+def mutate_hits(source: str) -> list[tuple[int, str]]:
+    """Every place ``source`` reaches a mutate method, as (line, what).
+
+    Parsed with ``ast`` rather than matched with a regex, for two reasons the
+    regex version got wrong in practice:
+
+    * A comment mentioning ``.mutate()`` produced a false hit, so the old scan
+      needed a "skip lines starting with # or a quote" heuristic...
+    * ...and that heuristic then hid a REAL hit, because a dispatch-table entry
+      ``"mutate_campaigns": ...`` is a line starting with a quote. The Phase 2
+      client is written exactly that way, which is how the gap surfaced.
+
+    The AST has neither problem: comments are not in it, docstrings are
+    identified precisely, and a dict key is just a string constant.
+
+    This remains a tripwire, not a sandbox -- code that assembles a method name
+    at runtime can defeat it. It is worth having because the failure it
+    prevents is someone adding a write in the obvious way without noticing
+    which guarantee they broke.
+    """
+    tree = ast.parse(source)
+    docstrings = _docstring_nodes(tree)
+    hits: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        # A CALL, not a bare attribute access. `service.mutate` that is never
+        # invoked changes nothing, and the read-only guard in
+        # scripts/test_connection.py touches exactly that attribute in order to
+        # assert it is REFUSED. Flagging the access would make the proof of the
+        # guarantee look like a breach of it.
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and MUTATE_NAME.match(func.attr):
+                hits.append((func.lineno, f".{func.attr}()"))
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+            and MUTATE_NAME.match(node.value)
+        ):
+            hits.append((node.lineno, repr(node.value)))
+    return sorted(set(hits))
+
+
+#: The ONE directory allowed to mutate. Phase 2 lives here; everything else in
+#: the repository is still held to the Phase 1 guarantee. Widening this tuple is
+#: the deliberate act that enlarges the write surface -- it is not a formality.
+WRITE_SURFACE = (PROJECT_ROOT / "googleads_reporting" / "write",)
 
 
 def _source_files() -> list[Path]:
+    """Every source file that must NOT be able to mutate."""
     files = []
     for directory in ("googleads_reporting", "scripts"):
-        files.extend(sorted((PROJECT_ROOT / directory).rglob("*.py")))
+        for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
+            if any(path.is_relative_to(allowed) for allowed in WRITE_SURFACE):
+                continue
+            files.append(path)
     return files
+
+
+def test_the_write_surface_exists_and_is_excluded():
+    """Guards the exclusion itself.
+
+    If write/ were deleted or moved, the scan below would still pass -- over a
+    set that no longer contains the thing it was carved out for. Pinning it
+    means the carve-out cannot quietly become unbounded.
+    """
+    for directory in WRITE_SURFACE:
+        assert directory.is_dir(), directory
+    scanned = {p.resolve() for p in _source_files()}
+    write_files = {
+        p.resolve()
+        for directory in WRITE_SURFACE
+        for p in directory.rglob("*.py")
+    }
+    assert write_files, "write/ contains no Python files"
+    assert not (scanned & write_files), "write/ leaked into the scanned set"
+
+
+def test_the_write_surface_really_does_mutate():
+    """The exclusion must be load-bearing, not decorative.
+
+    If write/ contained no mutate call, the scan would pass everywhere and this
+    whole arrangement would prove nothing.
+    """
+    found = []
+    for directory in WRITE_SURFACE:
+        for path in directory.rglob("*.py"):
+            for line, what in mutate_hits(path.read_text()):
+                found.append(f"{path.name}:{line}: {what}")
+    assert found, (
+        "write/ makes no mutate call, so excluding it from the scan proves "
+        "nothing. Either Phase 2 is not wired up, or the scan is misconfigured."
+    )
 
 
 def test_source_files_were_actually_found():
@@ -46,26 +153,65 @@ def test_source_files_were_actually_found():
     files = _source_files()
     assert len(files) >= 5, [str(f) for f in files]
     assert any(f.name == "client.py" for f in files)
+    # The read-only client specifically must be in scope.
+    assert any(
+        f == PROJECT_ROOT / "googleads_reporting" / "client.py" for f in files
+    )
 
 
 def test_no_mutate_call_anywhere_in_the_source_tree():
     offenders = []
     for path in _source_files():
-        for number, line in enumerate(path.read_text().splitlines(), start=1):
-            if MUTATE_CALL.search(line) and not _ALLOWED_CONTEXT.match(line):
-                offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{number}: {line.strip()}")
+        for line, what in mutate_hits(path.read_text()):
+            offenders.append(f"{path.relative_to(PROJECT_ROOT)}:{line}: {what}")
     assert offenders == [], (
         "Phase 1 is read-only. Found mutate call(s):\n" + "\n".join(offenders)
     )
 
 
-def test_the_scan_would_catch_a_real_mutate_call():
-    """Negative control: a regex that matches nothing passes every file."""
-    assert MUTATE_CALL.search("service.mutate(request=req)")
-    assert MUTATE_CALL.search("client.get_service('CampaignService').mutate_campaigns(x)")
-    assert MUTATE_CALL.search("svc .mutate ( req )")
-    assert not MUTATE_CALL.search("# never call .mutate on a service")
-    assert not MUTATE_CALL.search("search_stream(customer_id=cid, query=q)")
+@pytest.mark.parametrize(
+    "source",
+    [
+        "service.mutate(request=req)",
+        "client.get_service('CampaignService').mutate_campaigns(x)",
+        # Indirect forms a `.mutate(` regex misses entirely:
+        'getattr(service, "mutate_campaigns")(request=r)',
+        'METHODS = {"mutate_ad_groups": AdGroupService}',
+        "op = getattr(svc, 'mutate_ad_group_ads')",
+        'name = "mutate_campaign_budgets"',
+    ],
+)
+def test_the_scan_catches_a_real_mutate(source):
+    """Negative control: a scan matching nothing would pass every file."""
+    assert mutate_hits(source), source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "# never call .mutate on a service",
+        "search_stream(customer_id=cid, query=q)",
+        "    # mutate_campaigns is not permitted here",
+        '"""This module must never call mutate_campaigns."""',
+        "x = 'mutating the list in place'",
+    ],
+)
+def test_the_scan_does_not_fire_on_mere_mentions(source):
+    """Comments and docstrings must not produce a false positive."""
+    assert mutate_hits(source) == [], source
+
+
+def test_a_bare_attribute_access_is_not_a_mutation():
+    """`service.mutate` without a call cannot change anything.
+
+    This is not a loophole -- it is what the read-only guard in
+    scripts/test_connection.py does to prove the attribute is REFUSED. Flagging
+    it would make the proof of the guarantee read as a breach of it. Anything
+    that actually invokes it is still caught, in either form.
+    """
+    assert mutate_hits("with pytest.raises(X): service.mutate") == []
+    assert mutate_hits("service.mutate(request=r)")
+    assert mutate_hits('getattr(service, "mutate_campaigns")')
 
 
 #: The library's yaml/env config loaders. Using either would put credentials
@@ -277,6 +423,49 @@ def test_the_wrapped_object_really_is_the_generated_service(real_client):
     service = real_client._service("GoogleAdsService")
     assert type(service._service).__name__ == "GoogleAdsServiceClient"
     assert hasattr(service._service, "mutate")
+
+
+# --------------------------------------------------------------------------
+# Phase 2 must not reach back into Phase 1
+# --------------------------------------------------------------------------
+
+
+def test_the_read_only_client_gained_nothing_from_phase_2():
+    """Importing the write package must not alter the read-only surface."""
+    import googleads_reporting.write  # noqa: F401
+
+    assert ALLOWED_SERVICES == {"GoogleAdsService", "CustomerService"}
+    assert ALLOWED_METHODS == {"search", "search_stream", "list_accessible_customers"}
+
+
+def test_the_read_only_client_cannot_reach_a_mutating_client(client):
+    """No attribute on the read-only client hands back a writer."""
+    from googleads_reporting.write import MutatingGoogleAdsClient
+
+    for name in dir(client):
+        if name.startswith("__"):
+            continue
+        try:
+            value = getattr(client, name)
+        except (ReadOnlyViolation, AttributeError):
+            continue
+        assert not isinstance(value, MutatingGoogleAdsClient), name
+
+
+def test_the_read_only_module_does_not_import_the_write_package():
+    """A read-only module importing the writer is a smell worth failing on."""
+    source = (PROJECT_ROOT / "googleads_reporting" / "client.py").read_text()
+    assert "from .write" not in source
+    assert "import write" not in source
+
+
+def test_the_write_package_reuses_the_single_client_factory():
+    """Phase 2 must not grow a second place where credentials become a client."""
+    source = (
+        PROJECT_ROOT / "googleads_reporting" / "write" / "client.py"
+    ).read_text()
+    assert "build_raw_client" in source
+    assert "load_from_dict" not in source
 
 
 def test_allowlists_have_not_drifted():
