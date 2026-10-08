@@ -262,6 +262,92 @@ each other.
 
 ---
 
+## Changing things (Phase 2)
+
+`scripts/manage.py` creates and updates campaigns, budgets, ad groups and ads.
+
+### Find what you want to change
+
+Campaign IDs are not shown anywhere obvious in the Google Ads UI, but names are
+on every screen — so start from a name:
+
+```bash
+./.venv/bin/python scripts/manage.py find campaign "cpm - desktop"
+./.venv/bin/python scripts/manage.py find adgroup          # everything
+```
+
+```
+4 campaign(s) matching 'cpm - desktop' (275-626-1338):
+
+  24218821846      2026 - CPM - Desktop  [ENABLED, DISPLAY]
+  24218821843      2026 - En - CPM - Desktop  [ENABLED, DISPLAY]
+```
+
+Then act by `--name` or by `--campaign-id`. Name matching is:
+
+1. **exact first** — a name that matches exactly wins, even if it is also a
+   substring of other names;
+2. then **case-insensitive substring** — `"2026 - en - cpm"` finds
+   `2026 - En - CPM - Desktop`;
+3. and **several matches are refused**, never guessed, with the candidates and
+   their IDs printed so you can pick one.
+
+Names with apostrophes work (`Paniers d'été`). Names are *not* unique in Google
+Ads, so two campaigns really can share one — hence the refusal.
+
+### Make a change
+
+```bash
+# validate against Google and stop — changes nothing
+./.venv/bin/python scripts/manage.py campaign pause --name "2026 - En - CPM - Desktop" --dry-run
+
+# the same, then a typed confirmation before it applies
+./.venv/bin/python scripts/manage.py campaign pause --campaign-id 24218821843
+
+./.venv/bin/python scripts/manage.py campaign enable --campaign-id 24218821843
+./.venv/bin/python scripts/manage.py campaign rename --campaign-id 123 --new-name "..."
+./.venv/bin/python scripts/manage.py budget set-amount --budget-id 456 --amount 25
+./.venv/bin/python scripts/manage.py adgroup set-bid --ad-group-id 789 --amount 0.75
+./.venv/bin/python scripts/manage.py ad pause --ad-id 321
+```
+
+Every command runs in the same order, and the order is the point:
+
+1. read current state and build the operations;
+2. send them to Google with `validate_only=True` — the full server-side check,
+   changing nothing;
+3. print the diff and wait for you to type `yes`.
+
+So a request Google would reject is rejected at step 2, **before** you are
+asked to approve it. `--dry-run` stops after step 2; `--yes` skips step 3.
+
+### What stops a bad change
+
+| Guard | What it catches |
+|---|---|
+| `validate_only` first | Anything the API would reject, before the prompt |
+| Created `PAUSED` by default | A new campaign spending before anyone reviewed it |
+| Daily-budget ceiling | `$50` typed as micros — `$50,000,000` |
+| Ambiguous name refused | Pausing the wrong campaign of four |
+| No tty / EOF / Ctrl-C → abort | An unattended run mutating an account |
+| `REMOVED` warns | It is permanent in Google Ads; `PAUSED` is reversible |
+| Service allowlist | Billing and user-access services are not reachable at all |
+
+Every applied mutation is written to `audit/mutations-<date>.jsonl` — two
+records, `attempt` before the call and `outcome` after, so an attempt with no
+outcome tells you the process died mid-request.
+
+### The read-only guarantee still holds
+
+Phase 2 lives entirely in `googleads_reporting/write/`. `ReadOnlyGoogleAdsClient`
+gained nothing; reaching a write means importing a different class from a
+different subpackage. `tests/test_readonly_guard.py` parses every *other* source
+file with `ast` and fails if it so much as calls a `mutate*` method — and
+separately asserts that `write/` really does contain one, so the carve-out
+cannot quietly become decorative.
+
+---
+
 ## Layout
 
 ```
@@ -273,11 +359,18 @@ googleads_reporting/
   fields.py       row extraction, enum names, micros conversion
   export.py       DataFrame / CSV output, totals
   reports/        declarative report definitions + registry
+  write/          Phase 2 — the ONLY place that can mutate
+    client.py     MutatingGoogleAdsClient, validate-then-apply
+    plan.py       PlannedChange: the protos and the diff together
+    lookup.py     find an entity by name, refuse ambiguity
+    budgets.py / campaigns.py / adgroups.py / ads.py
+    audit.py      append-only JSONL log of every mutation
 scripts/
   generate_refresh_token.py   one-time OAuth consent
   test_connection.py          diagnostic ladder
-  fetch_report.py             run a report
-tests/                        250 tests, all offline
+  fetch_report.py             run a report (read)
+  manage.py                   create and update (write)
+tests/                        394 tests, all offline
 ```
 
 Pinned in `requirements.txt`: `google-ads==33.0.0`, which bundles API versions

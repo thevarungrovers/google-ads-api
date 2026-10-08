@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from ..query import Query, quote_literal
+from ..query import Query
 from .client import MutatingGoogleAdsClient, MutationError
+from .lookup import Candidate, NotFound, resolve, search
 from .plan import FieldChange, PlannedChange, micros, set_update_mask
 
 SERVICE = "AdGroupService"
@@ -27,28 +28,45 @@ def find(
 ):
     if (ad_group_id is None) == (name is None):
         raise MutationError("Give exactly one of ad_group_id or name.")
-    condition = (
-        f"ad_group.id = {int(ad_group_id)}"
-        if ad_group_id is not None
-        else f"ad_group.name = {quote_literal(name)}"
-    )
-    rows = client.query(
-        Query(select=_FIELDS, from_resource="ad_group", where=(condition,)).to_gaql(),
-        customer_id=customer_id,
-    )
-    if not rows:
-        raise LookupError(f"No ad group matching {condition}.")
-    if len(rows) > 1:
-        # Ad group names are only unique WITHIN a campaign, so a bare name match
-        # across the account is routinely ambiguous.
-        found = ", ".join(
-            f"{r.ad_group.id} (in {r.campaign.name})" for r in rows
+    if ad_group_id is not None:
+        rows = client.query(
+            Query(
+                select=_FIELDS,
+                from_resource="ad_group",
+                where=(f"ad_group.id = {int(ad_group_id)}",),
+            ).to_gaql(),
+            customer_id=customer_id,
         )
-        raise MutationError(
-            f"{len(rows)} ad groups match {condition}: {found}. "
-            "Use --ad-group-id to pick one."
-        )
-    return rows[0]
+        if not rows:
+            raise NotFound(f"No ad group with id {ad_group_id}.")
+        return rows[0]
+
+    # Ad group names are only unique WITHIN a campaign, so an account-wide name
+    # match is routinely ambiguous -- the candidate list names the campaign so
+    # the duplicates can actually be told apart.
+    return resolve(
+        client, entity="ad group", id_field="ad_group.id",
+        name_field="ad_group.name", resource="ad_group", select=_FIELDS,
+        needle=name, customer_id=customer_id, to_candidate=as_candidate,
+    )
+
+
+def as_candidate(row) -> Candidate:
+    return Candidate(
+        id=str(row.ad_group.id),
+        name=row.ad_group.name,
+        status=row.ad_group.status.name,
+        context=f"in {row.campaign.name}",
+    )
+
+
+def search_ad_groups(client, needle=None, *, customer_id=None, limit=50):
+    """Ad groups whose name contains ``needle``. Read-only."""
+    return search(
+        client, resource="ad_group", select=_FIELDS,
+        name_field="ad_group.name", needle=needle,
+        customer_id=customer_id, limit=limit,
+    )
 
 
 def plan_set_status(

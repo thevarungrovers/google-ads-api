@@ -241,6 +241,52 @@ def quote_literal(value: str) -> str:
     return f"'{value}'"
 
 
+def quote_double(value: str) -> str:
+    """Quote a GAQL literal using DOUBLE quotes.
+
+    The single-quoted form in :func:`quote_literal` cannot carry an apostrophe,
+    which rules out perfectly ordinary campaign names -- "Paniers d'été", "Dad's
+    Day". GAQL accepts double-quoted literals too, so an apostrophe needs no
+    escaping at all inside one.
+
+    What is still refused is a double quote, a backslash or a newline: those
+    could close the literal. As in :func:`quote_literal`, refusing beats
+    escaping, because refusal has no bypass.
+
+    >>> print(quote_double("Paniers d'été"))
+    "Paniers d'été"
+    >>> print(quote_double("Brand - EN"))
+    "Brand - EN"
+    """
+    if any(ch in value for ch in '"\\\n\r'):
+        raise QueryError(
+            f"Refusing to quote a literal containing a double quote, backslash "
+            f"or newline: {value!r}."
+        )
+    return f'"{value}"'
+
+
+def contains(field_path: str, needle: str) -> str:
+    """A case-insensitive substring match: ``field LIKE "%needle%"``.
+
+    GAQL's ``LIKE`` is case-insensitive -- verified against the live API, where
+    ``'%en - cpm%'`` returned the same rows as ``'%En - CPM%'``. That makes it
+    the right operator for "find me the campaign I half-remember the name of",
+    which is how people actually reach a campaign: names are visible in the UI
+    and IDs are not.
+
+    ``%`` and ``_`` keep their wildcard meaning, so a literal percent in the
+    search text will behave as a wildcard.
+
+    >>> contains("campaign.name", "CPM")
+    'campaign.name LIKE "%CPM%"'
+    """
+    _validate_field_path(field_path)
+    if not needle.strip():
+        raise QueryError("Search text is empty.")
+    return f"{field_path} LIKE {quote_double('%' + needle + '%')}"
+
+
 def in_list(field_path: str, values: Iterable[str]) -> str:
     """A ``field IN ('a', 'b')`` condition.
 

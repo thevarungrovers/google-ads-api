@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from ..query import Query, quote_literal
+from ..query import Query
 from .client import MutatingGoogleAdsClient, MutationError
+from .lookup import Candidate, NotFound, resolve, search
 from .plan import FieldChange, PlannedChange, set_update_mask
 
 SERVICE = "CampaignService"
@@ -29,26 +30,42 @@ def find(
     if (campaign_id is None) == (name is None):
         raise MutationError("Give exactly one of campaign_id or name.")
 
-    condition = (
-        f"campaign.id = {int(campaign_id)}"
-        if campaign_id is not None
-        else f"campaign.name = {quote_literal(name)}"
-    )
-    rows = client.query(
-        Query(select=_FIELDS, from_resource="campaign", where=(condition,)).to_gaql(),
-        customer_id=customer_id,
-    )
-    if not rows:
-        raise LookupError(f"No campaign matching {condition}.")
-    if len(rows) > 1:
-        # Campaign names are not unique in Google Ads, so a name match can be
-        # ambiguous. Refusing beats mutating an arbitrary one of them.
-        ids = ", ".join(str(r.campaign.id) for r in rows)
-        raise MutationError(
-            f"{len(rows)} campaigns match {condition} (ids: {ids}). "
-            "Use --campaign-id to pick one."
+    if campaign_id is not None:
+        rows = client.query(
+            Query(
+                select=_FIELDS,
+                from_resource="campaign",
+                where=(f"campaign.id = {int(campaign_id)}",),
+            ).to_gaql(),
+            customer_id=customer_id,
         )
-    return rows[0]
+        if not rows:
+            raise NotFound(f"No campaign with id {campaign_id}.")
+        return rows[0]
+
+    return resolve(
+        client, entity="campaign", id_field="campaign.id",
+        name_field="campaign.name", resource="campaign", select=_FIELDS,
+        needle=name, customer_id=customer_id, to_candidate=as_candidate,
+    )
+
+
+def as_candidate(row) -> Candidate:
+    return Candidate(
+        id=str(row.campaign.id),
+        name=row.campaign.name,
+        status=row.campaign.status.name,
+        context=row.campaign.advertising_channel_type.name,
+    )
+
+
+def search_campaigns(client, needle=None, *, customer_id=None, limit=50):
+    """Campaigns whose name contains ``needle``. Read-only."""
+    return search(
+        client, resource="campaign", select=_FIELDS,
+        name_field="campaign.name", needle=needle,
+        customer_id=customer_id, limit=limit,
+    )
 
 
 def plan_set_status(

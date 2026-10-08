@@ -77,6 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     entity = parser.add_subparsers(dest="entity", required=True)
 
+    # -- find (read-only) --------------------------------------------------
+    find = entity.add_parser(
+        "find",
+        parents=[common],
+        help="search campaigns or ad groups by name, and show their ids",
+    )
+    find.add_argument("what", choices=["campaign", "adgroup"])
+    find.add_argument("text", nargs="?", help="substring of the name; omit for all")
+    find.add_argument("--limit", type=int, default=50)
+
     # -- campaign ---------------------------------------------------------
     campaign = entity.add_parser("campaign", parents=[common]).add_subparsers(
         dest="action", required=True
@@ -84,7 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
     for verb in ("pause", "enable", "remove"):
         sub = campaign.add_parser(verb, parents=[common])
         sub.add_argument("--campaign-id")
-        sub.add_argument("--name")
+        sub.add_argument(
+            "--name",
+            help="campaign name; exact match wins, else case-insensitive substring",
+        )
     rename = campaign.add_parser("rename", parents=[common])
     rename.add_argument("--campaign-id")
     rename.add_argument("--name")
@@ -112,7 +125,10 @@ def build_parser() -> argparse.ArgumentParser:
     for verb in ("pause", "enable", "remove"):
         sub = adgroup.add_parser(verb, parents=[common])
         sub.add_argument("--ad-group-id")
-        sub.add_argument("--name")
+        sub.add_argument(
+            "--name",
+            help="ad group name; exact match wins, else case-insensitive substring",
+        )
     bid = adgroup.add_parser("set-bid", parents=[common])
     bid.add_argument("--ad-group-id")
     bid.add_argument("--name")
@@ -213,6 +229,30 @@ def build_plan(client, args) -> PlannedChange:
     raise MutationError(f"Unsupported: {entity} {action}")
 
 
+def run_find(client, args, target: str) -> int:
+    """Print matching entities and their ids. Changes nothing."""
+    if args.what == "campaign":
+        rows = campaigns.search_campaigns(
+            client, args.text, customer_id=target, limit=args.limit
+        )
+        found = [campaigns.as_candidate(r) for r in rows]
+    else:
+        rows = adgroups.search_ad_groups(
+            client, args.text, customer_id=target, limit=args.limit
+        )
+        found = [adgroups.as_candidate(r) for r in rows]
+
+    if not found:
+        print(f"No {args.what} matching {args.text!r}.")
+        return 1
+
+    label = f"matching {args.text!r}" if args.text else "in the account"
+    print(f"{len(found)} {args.what}(s) {label} ({format_customer_id(target)}):\n")
+    for candidate in found:
+        print(candidate.render())
+    return 0
+
+
 def confirm(plan: PlannedChange, target: str) -> bool:
     print("\n" + "=" * 68)
     print(plan.render())
@@ -242,6 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, CustomerIdError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if args.entity == "find":
+        return run_find(client, args, target)
 
     try:
         plan = build_plan(client, args)
