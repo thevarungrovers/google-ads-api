@@ -208,3 +208,42 @@ def test_every_problem_is_reported_at_once():
     assert "descriptions" in message
     assert "headline 1 is 40 chars" in message
     assert "absolute http" in message
+
+
+# --------------------------------------------------------------------------
+# Money is in currency units, never micros
+# --------------------------------------------------------------------------
+
+
+def test_the_guardrail_message_says_units_are_not_micros(client):
+    """The old wording led with 'micros' and read as if the CLI wanted them."""
+    with pytest.raises(GuardrailViolation) as exc:
+        client.check_daily_budget(2_500_000.0)
+    message = str(exc.value)
+    assert "NOT micros" in message
+    assert "this tool does the micros conversion for you" in message
+    # It should name the value they probably meant.
+    assert "2.50" in message
+    assert "--override-budget-guardrail" in message
+
+
+def test_the_cli_money_flags_document_their_units():
+    """A flag taking dollars must say so where it is read."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "manage.py"
+    spec = importlib.util.spec_from_file_location("manage_units", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["manage_units"] = module
+    spec.loader.exec_module(module)
+
+    help_text = module.build_parser().format_help()
+    for args in (
+        ["campaign", "set-budget", "--help"],
+        ["budget", "set-amount", "--help"],
+        ["adgroup", "set-bid", "--help"],
+    ):
+        with pytest.raises(SystemExit):
+            module.build_parser().parse_args(args)

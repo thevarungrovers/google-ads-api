@@ -233,10 +233,13 @@ class MutatingGoogleAdsClient:
             return
         if amount > self.max_daily_budget:
             raise GuardrailViolation(
-                f"Daily budget {amount:,.2f} exceeds the guardrail of "
-                f"{self.max_daily_budget:,.2f}. If that is genuinely intended, "
-                "pass the override; if it is 1,000,000x the number you meant, "
-                "you have entered micros instead of currency units."
+                f"Refusing a daily budget of {amount:,.2f} "
+                f"(guardrail: {self.max_daily_budget:,.2f}).\n"
+                "  Amounts here are in the account's currency, NOT micros -- "
+                "this tool does the micros conversion for you.\n"
+                f"  If you meant {amount / 1_000_000:,.2f}, pass that instead.\n"
+                f"  If you really do want {amount:,.2f} per day, re-run with "
+                "--override-budget-guardrail."
             )
 
 

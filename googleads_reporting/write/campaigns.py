@@ -139,6 +139,45 @@ def plan_rename(
     )
 
 
+def plan_set_budget(
+    client: MutatingGoogleAdsClient,
+    *,
+    amount: float,
+    campaign_id: str | None = None,
+    name: str | None = None,
+    customer_id: str | None = None,
+    override_guardrail: bool = False,
+) -> PlannedChange:
+    """Set the daily budget of the campaign's budget, found via the campaign.
+
+    In the Google Ads data model a budget is a separate entity that a campaign
+    POINTS AT -- it is not a field on the campaign. People do not think that
+    way: they think "this campaign's budget". So this resolves the campaign,
+    follows it to its budget, and changes that, which means nobody has to go
+    hunting for a budget id the UI never shows them.
+
+    The indirection is real, though, not just plumbing: one budget can be
+    shared by several campaigns, and changing it then changes all of them. That
+    is why the plan warns instead of hiding it.
+    """
+    from . import budgets
+
+    row = find(client, campaign_id=campaign_id, name=name, customer_id=customer_id)
+    plan = budgets.plan_set_amount(
+        client,
+        str(row.campaign_budget.id),
+        amount=amount,
+        customer_id=customer_id,
+        override_guardrail=override_guardrail,
+    )
+    # Relabel in the terms the request was made in.
+    plan.label = (
+        f"{row.campaign.name} (campaign {row.campaign.id}, "
+        f"budget {row.campaign_budget.id})"
+    )
+    return plan
+
+
 def plan_create(
     client: MutatingGoogleAdsClient,
     *,

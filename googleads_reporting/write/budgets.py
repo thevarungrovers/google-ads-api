@@ -18,6 +18,7 @@ def _budget_row(client: MutatingGoogleAdsClient, budget_id: str, customer_id=Non
             select=("campaign_budget.id", "campaign_budget.name",
                     "campaign_budget.amount_micros",
                     "campaign_budget.explicitly_shared",
+                    "campaign_budget.reference_count",
                     "campaign_budget.resource_name"),
             from_resource="campaign_budget",
             where=(f"campaign_budget.id = {int(budget_id)}",),
@@ -82,7 +83,8 @@ def plan_set_amount(
     warnings = []
     if current.explicitly_shared:
         warnings.append(
-            "this budget is SHARED -- the change affects every campaign using it"
+            "this budget is SHARED -- the change affects EVERY campaign using "
+            "it, not just the one you named"
         )
     if before and amount > before * 10:
         warnings.append(

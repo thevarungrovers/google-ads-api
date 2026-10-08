@@ -102,6 +102,19 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("--campaign-id")
     rename.add_argument("--name")
     rename.add_argument("--new-name", required=True)
+    setbudget = campaign.add_parser("set-budget", parents=[common])
+    setbudget.add_argument("--campaign-id")
+    setbudget.add_argument(
+        "--name",
+        help="campaign name; exact match wins, else case-insensitive substring",
+    )
+    setbudget.add_argument(
+        "--amount",
+        type=float,
+        required=True,
+        help="daily budget in the account's currency (e.g. 25 or 2.50), NOT micros",
+    )
+
     create = campaign.add_parser("create", parents=[common])
     create.add_argument("--name", required=True)
     create.add_argument("--budget-resource-name", required=True)
@@ -114,7 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     budget = entity.add_parser("budget", parents=[common]).add_subparsers(dest="action", required=True)
     amount = budget.add_parser("set-amount", parents=[common])
     amount.add_argument("--budget-id", required=True)
-    amount.add_argument("--amount", type=float, required=True)
+    amount.add_argument(
+        "--amount", type=float, required=True,
+        help="daily budget in the account's currency, NOT micros",
+    )
     bcreate = budget.add_parser("create", parents=[common])
     bcreate.add_argument("--name", required=True)
     bcreate.add_argument("--amount", type=float, required=True)
@@ -132,7 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
     bid = adgroup.add_parser("set-bid", parents=[common])
     bid.add_argument("--ad-group-id")
     bid.add_argument("--name")
-    bid.add_argument("--amount", type=float, required=True)
+    bid.add_argument(
+        "--amount", type=float, required=True,
+        help="max CPC in the account's currency, NOT micros",
+    )
     gcreate = adgroup.add_parser("create", parents=[common])
     gcreate.add_argument("--name", required=True)
     gcreate.add_argument("--campaign-resource-name", required=True)
@@ -173,6 +192,12 @@ def build_plan(client, args) -> PlannedChange:
             return campaigns.plan_rename(
                 client, new_name=args.new_name,
                 campaign_id=args.campaign_id, name=args.name,
+            )
+        if action == "set-budget":
+            return campaigns.plan_set_budget(
+                client, amount=args.amount,
+                campaign_id=args.campaign_id, name=args.name,
+                override_guardrail=override,
             )
         if action == "create":
             return campaigns.plan_create(
