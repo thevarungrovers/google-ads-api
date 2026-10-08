@@ -1,0 +1,12 @@
+# Google Ads API — Phase 1 (read-only reporting)
+# Pinned deliberately: the google-ads client library ships a fixed set of API
+# versions per release, so an unpinned upgrade can remove the version this code
+# targets. Bump on purpose, then re-run the test suite.
+
+google-ads==33.0.0
+google-auth-oauthlib==1.5.0
+python-dotenv==1.2.4
+pandas==3.0.6
+
+# --- dev / test ---
+pytest==9.1.1
