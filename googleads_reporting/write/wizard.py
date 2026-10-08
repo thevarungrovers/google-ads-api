@@ -17,6 +17,8 @@ from pathlib import Path
 from .client import MutationError
 from .spec import (
     CREATABLE_CHANNELS,
+    RDA_BUSINESS,
+    RDA_LONG_HEADLINE,
     AdGroupSpec,
     CampaignSpec,
     ResponsiveDisplayAdSpec,
@@ -42,14 +44,53 @@ def _ask(prompt: str, *, default: str | None = None, required: bool = True) -> s
         print("  (required)")
 
 
-def _ask_float(prompt: str, *, default: float | None = None) -> float:
+def _ask_float(
+    prompt: str, *, default: float | None = None, minimum: float = 0.0
+) -> float:
     while True:
         raw = _ask(prompt, default=str(default) if default is not None else None)
         try:
-            return float(raw)
+            value = float(raw)
         except ValueError:
             print(f"  '{raw}' is not a number. Amounts are in your account's "
                   "currency, e.g. 25 or 2.50 -- not micros.")
+            continue
+        if value <= minimum:
+            print(f"  must be greater than {minimum}.")
+            continue
+        return value
+
+
+def _ask_text(prompt: str, *, limit: int) -> str:
+    """A required single line, length-checked where it is typed."""
+    while True:
+        value = _ask(f"{prompt} (max {limit} chars)")
+        if len(value) <= limit:
+            return value
+        print(f"  too long: {len(value)} chars, max {limit}. Drop "
+              f"{len(value) - limit}.")
+
+
+def _ask_url(prompt: str) -> str:
+    """A landing page URL, checked here rather than at the very end.
+
+    A bare domain is the normal thing to type, and rejecting it outright after
+    a dozen further questions is the worst of both worlds -- so it is offered
+    back with https:// in front, which is what was meant.
+    """
+    while True:
+        raw = _ask(prompt)
+        if raw.startswith(("http://", "https://")):
+            return raw
+        if "." in raw and " " not in raw and not raw.startswith("/"):
+            suggestion = f"https://{raw}"
+            answer = _ask(
+                f"  needs a scheme -- use {suggestion}?", default="yes"
+            ).lower()
+            if answer in ("y", "yes"):
+                return suggestion
+            continue
+        print("  must be an absolute URL, e.g. https://example.com/page")
 
 
 def _ask_choice(prompt: str, options: tuple[str, ...]) -> str:
@@ -125,7 +166,9 @@ def ask_for_campaign() -> CampaignSpec:
     print("\nNew campaign\n" + "-" * 60)
     channel = _ask_choice("Channel", CREATABLE_CHANNELS)
     name = _ask("Campaign name")
-    budget = _ask_float("Daily budget (account currency, not micros)")
+    budget = _ask_float(
+        "Daily budget (account currency, not micros)", minimum=0.0
+    )
     status = _ask_choice("Start as", ("PAUSED", "ENABLED"))
     if status == "ENABLED":
         print("  ! ENABLED means it can start spending as soon as it is created.")
@@ -149,7 +192,7 @@ def ask_for_campaign() -> CampaignSpec:
             keywords.append(keyword)
 
     print("\nAd\n" + "-" * 60)
-    final_url = _ask("Landing page URL")
+    final_url = _ask_url("Landing page URL")
 
     if channel == "SEARCH":
         ad = ResponsiveSearchAdSpec(
@@ -158,8 +201,8 @@ def ask_for_campaign() -> CampaignSpec:
             final_url=final_url,
         )
     else:
-        business = _ask("Business name (max 25 chars)")
-        long_headline = _ask("Long headline (max 90 chars)")
+        business = _ask_text("Business name", limit=RDA_BUSINESS)
+        long_headline = _ask_text("Long headline", limit=RDA_LONG_HEADLINE)
         headlines = _ask_list("headlines", least=1, most=5, limit=30)
         descriptions = _ask_list("descriptions", least=1, most=5, limit=90)
         print("\n  Images. Google needs both shapes; the logo slots are optional.")
