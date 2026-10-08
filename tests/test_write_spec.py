@@ -263,3 +263,39 @@ def test_image_paths_collects_every_slot(tmp_path):
         ad_groups=[AdGroupSpec(name="G", ads=[ad])],
     )
     assert len(spec.image_paths()) == 4
+
+
+# --------------------------------------------------------------------------
+# Path entry: what a terminal actually hands you
+# --------------------------------------------------------------------------
+
+
+def test_a_dragged_path_with_escaped_spaces_resolves(tmp_path):
+    """Dragging a file into Terminal escapes spaces; Path() cannot open that."""
+    from googleads_reporting.write.wizard import normalize_path_input
+
+    target = png(tmp_path / "my hero.png", 10, 10)
+    assert normalize_path_input(str(target).replace(" ", "\\ ")) == target
+    assert normalize_path_input(str(target).replace(" ", "\\ ")).is_file()
+
+
+@pytest.mark.parametrize("wrap", ["'{}'", '"{}"', "  {}  "])
+def test_a_quoted_or_padded_path_resolves(tmp_path, wrap):
+    """'Copy as Pathname' wraps in quotes."""
+    from googleads_reporting.write.wizard import normalize_path_input
+
+    target = png(tmp_path / "hero.png", 10, 10)
+    assert normalize_path_input(wrap.format(target)) == target
+
+
+def test_a_tilde_path_is_expanded():
+    from googleads_reporting.write.wizard import normalize_path_input
+
+    assert str(normalize_path_input("~/x.png")).startswith("/")
+
+
+def test_a_plain_path_is_untouched(tmp_path):
+    from googleads_reporting.write.wizard import normalize_path_input
+
+    target = png(tmp_path / "plain.png", 10, 10)
+    assert normalize_path_input(str(target)) == target

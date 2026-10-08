@@ -80,6 +80,28 @@ def _ask_list(label: str, *, least: int, most: int, limit: int) -> list[str]:
     return values
 
 
+def normalize_path_input(raw: str) -> Path:
+    """Turn whatever the terminal handed us into a usable path.
+
+    The two obvious ways to enter a path on macOS both produce something
+    ``Path()`` cannot open:
+
+    * dragging a file into the terminal escapes spaces -- ``/tmp/my\\ hero.png``
+    * "Copy as Pathname" wraps it in quotes -- ``'/tmp/my hero.png'``
+
+    Refusing those would mean "no such file" for a file that is plainly there,
+    so both are unwound here, along with ``~``.
+    """
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1]
+    # Shell-style escapes, from a drag-and-drop.
+    for escaped, plain in (("\\ ", " "), ("\\(", "("), ("\\)", ")"),
+                           ("\\&", "&"), ("\\'", "'")):
+        text = text.replace(escaped, plain)
+    return Path(text).expanduser()
+
+
 def _ask_images(label: str, *, required: bool) -> list[Path]:
     note = "required" if required else "optional"
     print(f"  {label} ({note}). One path per line, blank to finish.")
@@ -91,7 +113,7 @@ def _ask_images(label: str, *, required: bool) -> list[Path]:
                 print("    (at least one is required)")
                 continue
             return paths
-        path = Path(raw).expanduser()
+        path = normalize_path_input(raw)
         if not path.is_file():
             print(f"    no such file: {path}")
             continue
