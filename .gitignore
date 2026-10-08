@@ -1,0 +1,27 @@
+# ---- Secrets: never commit ----
+.env
+*.env
+!.env.example
+client_secret*.json
+token*.json
+*refresh_token*
+*.pem
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Generated reports / exports ----
+data/
+output/
+
+# ---- OS / editor ----
+.DS_Store
+.idea/
+.vscode/
