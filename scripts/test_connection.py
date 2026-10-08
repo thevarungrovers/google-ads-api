@@ -13,7 +13,7 @@ a single failing report, which is the thing this script exists to separate:
   * ``list_accessible_customers`` needs no customer ID, so it proves the API
     answers this identity without implicating any account setting. It does NOT
     prove production access -- that check fires only on a real query, at rung
-    6. (Developer tokens were sunset on 2026-09-09 and are not sent.)
+    6.
   * a query against the MCC proves GOOGLE_ADS_LOGIN_CUSTOMER_ID.
   * a query against the target proves GOOGLE_ADS_CUSTOMER_ID and that the MCC
     actually manages it.
@@ -52,14 +52,13 @@ PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 #: 6 or later and reads like a wrong-customer-ID problem. It is not.
 ACCESS_LEVEL_MARKERS = (
     "only approved for use with test accounts",
-    "developer_token_not_approved",
+    "not_approved_for_production",
 )
 
 ACCESS_LEVEL_HINT = """The credentials are fine. Nothing in .env is wrong.
 
   The access level (Test/Explorer/Basic/Standard) belongs to the GOOGLE CLOUD
-  PROJECT that issued your OAuth client -- NOT to the developer token. The
-  API Center in the Google Ads UI is the legacy route and will not fix this.
+  PROJECT that issued your OAuth client. It is managed in the Cloud Console.
 
   *** The usual cause is a PROJECT MISMATCH. *** If you upgraded one project
   but GOOGLE_ADS_CLIENT_ID came from another, you silently fall back to Test.
@@ -149,8 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     # -- 3. client construction (and the OAuth token refresh) -------------
     # load_from_dict refreshes the OAuth token eagerly, so this rung is where a
     # bad client ID, client secret or refresh token surfaces -- not later, on
-    # the first query. It does NOT yet involve the developer token or any
-    # customer ID, so a failure here is narrowly the OAuth credentials.
+    # the first query. No customer ID is involved yet, so a failure here is
+    # narrowly the OAuth credentials.
     try:
         client = ReadOnlyGoogleAdsClient.from_env(settings=settings)
     except Exception as exc:  # noqa: BLE001
@@ -197,9 +196,7 @@ def main(argv: list[str] | None = None) -> int:
     # on a Cloud project restricted to Test, because the access-level check
     # only fires on a real query -- which is why rung 6 tests for it rather
     # than assuming a failure there is the MCC's fault.
-    #
-    # (Historically this rung tested the developer token. Those were sunset on
-    # 2026-09-09 and are no longer sent at all.)
+
     try:
         accessible = client.list_accessible_customers()
     except GoogleAdsReportingError as exc:

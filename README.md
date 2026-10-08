@@ -27,15 +27,14 @@ Always run through `./.venv/bin/python`, never the system `python3`.
 
 ### 1. What you need to collect
 
-Four things, from two different places. The Cloud Console gives you the OAuth
-client; the Google Ads UI gives you the developer token and the account IDs.
+Three things. The Cloud Console gives you the OAuth client; the Google Ads UI
+gives you the account ID.
 
 > **Do the whole of step 1 in ONE Cloud project, and note which one.**
 > The API access level attaches to the Cloud project that issued your OAuth
-> client — not to the developer token. Using a client from project A while
-> project B holds the approval means every production query is refused, while
-> the Google Ads UI cheerfully shows your token at Explorer. Step 1f is the
-> check; doing it now costs a minute and saves an hour.
+> client. Using a client from project A while project B holds the approval
+> means every production query is refused, with an error that names no project
+> at all. Step 1f is the check; doing it now costs a minute and saves an hour.
 
 | Value | Required? | From |
 |---|---|---|
@@ -43,21 +42,12 @@ client; the Google Ads UI gives you the developer token and the account IDs.
 | Customer ID | **yes** | The 10-digit ID of the account to report on |
 | Login customer ID | only sometimes | A manager account's own 10-digit ID — see below |
 
-**You do not need a manager account (MCC) just to use this.**
-`GOOGLE_ADS_LOGIN_CUSTOMER_ID` tells the API to *act as* a manager, and it
-matters only when the signed-in Google account reaches the target account
-**through** that manager rather than having direct access to it. If your
-consent account can open the target account directly, leave it blank — verified
-against the live API, every query works without it, including listing accounts
-under a manager. It is unrelated to the developer-token change below.
-
-> **No developer token needed.** They were **sunset on 2026-09-09**. The API
-> ignores them, access is decided by the Cloud project behind your OAuth client
-> (§1f), and Google has said a future major version will *reject* calls that
-> still send one — so this project never sends one. If you have an old token,
-> leave it in `.env`; it is reported as unused and dropped from the request.
-> The API Center page in the Google Ads UI now says as much, and the access
-> level it displays there is no longer authoritative.
+**You do not need a manager account (MCC).** `GOOGLE_ADS_LOGIN_CUSTOMER_ID`
+tells the API to *act as* a manager, and it matters only when your Google
+account reaches the target account **through** that manager instead of having
+direct access to it. If you can open the target account directly after signing
+in, leave it blank — every query works without it, including listing the
+accounts under a manager.
 
 ---
 
@@ -70,9 +60,6 @@ under a manager. It is unrelated to the developer-token change below.
    every problem in this section is actually "configured the wrong project".
 
 Billing is **not** required; the Google Ads API itself has no charge.
-
-> One developer token can be used from several Cloud projects, but a given
-> Cloud project can only ever use **one** developer token.
 
 #### 1b. Enable the Google Ads API
 
@@ -130,11 +117,6 @@ app (**Audience → Publish app**).
 
 Both may be pasted in dashed form; they are normalized automatically.
 
-There is no developer-token step any more — see the note under step 1. The
-API Center page still exists for the App Conversion Tracking and Remarketing
-API and for your API contact email, but nothing there affects Google Ads API
-access.
-
 #### 1f. Raise the access level — on the project that issued your client
 
 **Do this before your first call, not after it fails.** A new Cloud project is
@@ -144,10 +126,8 @@ every query is refused with:
 > The Google Cloud project is only approved for use with test accounts.
 > (`authorization_error=32`, or `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`)
 
-The trap is that this says nothing about *which* project, and the Google Ads UI
-will happily show your developer token at Explorer the whole time — because the
-level belongs to the **Cloud project**, not the token. Upgrading the wrong
-project looks exactly like having upgraded.
+The trap is that this says nothing about *which* project. Upgrading the wrong
+one looks exactly like having upgraded.
 
 Once `.env` has a client ID, print the project that actually matters:
 
@@ -166,9 +146,6 @@ https://console.cloud.google.com/google/ads-apis/overview?project=<PROJECT_NUMBE
 - Shows **Test** → apply for Explorer here. Usually auto-approved.
 - Shows **Explorer** or better → you are done; the level is on the right
   project.
-
-The **API Center** in the Google Ads UI is the legacy route and cannot lift a
-Cloud project's restriction.
 
 Prefer to reuse a project that is already approved? Create a new OAuth client
 inside *it* (step 1d), put that ID and secret in `.env`, and re-run
@@ -238,7 +215,7 @@ separates three failures that look identical from a single broken report:
 
 Rung 3 is a real network call: the library refreshes the OAuth token eagerly
 when the client is constructed, so bad OAuth credentials surface there rather
-than on the first query. That is what lets rung 5 isolate the developer token.
+than on the first query.
 
 ---
 
@@ -449,9 +426,6 @@ someone chose rather than a thing that leaked.
   world-readable.
 - Nothing prints a credential. `Settings.describe()` reports secrets as
   presence and length only, and a test asserts no prefix or suffix leaks.
-- A leftover `GOOGLE_ADS_DEVELOPER_TOKEN` is never sent and never printed — it
-  is reported as unused, and a test asserts its value stays out of the request
-  payload.
 - GAQL has no parameter binding, so `query.quote_literal` **refuses** values
   containing a quote, backslash or newline rather than trying to escape them.
 - If the refresh token leaks: revoke it at
@@ -462,7 +436,7 @@ someone chose rather than a thing that leaked.
 
 | Symptom | Cause |
 |---|---|
-| `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` / `authorization_error=32` / "only approved for use with test accounts" | The **Cloud project** behind `GOOGLE_ADS_CLIENT_ID` is at Test access. Usually a project mismatch: see §1f. Nothing to do with developer tokens, which are sunset. |
+| `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` / `authorization_error=32` / "only approved for use with test accounts" | The **Cloud project** behind `GOOGLE_ADS_CLIENT_ID` is at Test access. Usually a project mismatch: see §1f. |
 | API disabled for the project | The Google Ads API was never enabled — step 1b, on the project that owns the OAuth client. |
 | `redirect_uri_mismatch` | The OAuth client is a "Web application". It must be **Desktop app**. |
 | `USER_PERMISSION_DENIED` | The OAuth user has no access to that customer ID, or `LOGIN_CUSTOMER_ID` is set to an account that does not manage it. If the user has direct access, try clearing `LOGIN_CUSTOMER_ID` entirely. |

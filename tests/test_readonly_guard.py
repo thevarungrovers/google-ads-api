@@ -103,7 +103,6 @@ def test_the_yaml_scan_would_catch_a_real_loader_call():
 @pytest.fixture
 def settings():
     return Settings(
-        developer_token="dev-token-placeholder",
         client_id="client-id-placeholder",
         client_secret="client-secret-placeholder",
         refresh_token="refresh-token-placeholder",
@@ -234,7 +233,6 @@ def real_client(settings):
 
     raw = GoogleAdsClient(
         credentials=Credentials(token="offline-placeholder"),
-        developer_token="placeholder",
         login_customer_id=settings.login_customer_id,
         version=settings.api_version,
         use_proto_plus=True,
