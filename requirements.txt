@@ -8,5 +8,10 @@ google-auth-oauthlib==1.5.0
 python-dotenv==1.2.4
 pandas==3.0.6
 
+# --- MCP server (googleads_mcp/) ---
+# Lets an AI agent drive this library over stdio. Pinned with the rest: the
+# server's tool decorators and ToolAnnotations are API surface, not plumbing.
+mcp==2.3.0
+
 # --- dev / test ---
 pytest==9.1.1

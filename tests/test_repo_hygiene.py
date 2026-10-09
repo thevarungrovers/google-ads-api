@@ -55,7 +55,7 @@ def test_every_source_file_is_tracked():
     """An ignore rule written for secrets must not swallow source."""
     tracked = tracked_files()
     missing = []
-    for directory in ("googleads_reporting", "scripts", "tests"):
+    for directory in ("googleads_reporting", "googleads_mcp", "scripts", "tests"):
         for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
@@ -105,6 +105,8 @@ def test_the_essential_non_python_files_are_tracked():
         "private-key.pem",
         "output/campaigns_1234567890_20261008-120000.csv",
         "audit/mutations-2026-10-08.jsonl",
+        "audit/mcp-changes.jsonl",
+        "audit/WRITES_DISABLED",
         "data/raw.csv",
         ".venv/lib/python3.13/site-packages/x.py",
         "__pycache__/config.cpython-313.pyc",

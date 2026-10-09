@@ -1,0 +1,43 @@
+# Hard bounds on what the MCP server will apply to the live Google Ads account.
+#
+# COMMITTED ON PURPOSE. Every limit here is also a code constant in
+# googleads_mcp/guardrails.py; this file only overrides them. Committing it means
+# raising a limit is a visible diff with an author and a date, rather than an env
+# var someone exported once and nobody can find afterwards.
+#
+# A key you delete falls back to the code default. A key you misspell is an error
+# at startup, not a silently ignored line.
+#
+# These numbers apply to a live account with campaigns serving and spending
+# today. Google offers test accounts, but this server is pointed at the real one.
+
+[limits]
+# --- per-call bounds ---------------------------------------------------------
+max_daily_budget            = "100.00"  # decimal string, account currency
+max_budget_change_pct       = 50.0      # relative to the current budget
+max_cpc_bid                 = "5.00"
+max_bid_increase_pct        = 50.0
+max_entities_per_call       = 25
+max_projected_delta_per_day = "50.00"   # upper bound on extra daily spend
+
+# --- per-session bounds ------------------------------------------------------
+# These matter more than the per-call ones. A per-call limit does nothing to
+# stop a runaway loop making 400 individually-legal changes; a session counter
+# does.
+max_applies_per_session     = 20
+max_projected_session_delta = "150.00"
+
+[scope]
+# Customer ids the server may touch, as bare 10-digit strings. EMPTY means
+# "whatever GOOGLE_ADS_CUSTOMER_ID in .env points at, and nothing else" -- which
+# is the safe default, because one refresh token can reach every account under
+# the manager.
+allowed_customer_ids = []
+
+# Campaign ids the server may change. EMPTY means every campaign in the allowed
+# account. Pin this to one campaign for the first week, then widen.
+allowed_campaign_ids = []
+
+# Currencies a write may be denominated in. A limit of "100.00" means nothing
+# until you know 100.00 of what.
+allowed_currencies = ["CAD"]

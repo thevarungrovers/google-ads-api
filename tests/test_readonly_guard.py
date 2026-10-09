@@ -108,7 +108,7 @@ WRITE_SURFACE = (PROJECT_ROOT / "googleads_reporting" / "write",)
 def _source_files() -> list[Path]:
     """Every source file that must NOT be able to mutate."""
     files = []
-    for directory in ("googleads_reporting", "scripts"):
+    for directory in ("googleads_reporting", "googleads_mcp", "scripts"):
         for path in sorted((PROJECT_ROOT / directory).rglob("*.py")):
             if any(path.is_relative_to(allowed) for allowed in WRITE_SURFACE):
                 continue

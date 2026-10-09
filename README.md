@@ -379,6 +379,86 @@ rather than relaying an error code. Build those in the Google Ads UI.
 
 ---
 
+## Driving it from an AI agent (MCP)
+
+`googleads_mcp/` is a stdio MCP server exposing this tooling to Claude or any
+MCP client. Register it with an **absolute** interpreter and script path — the
+launching process's PATH and cwd are not yours:
+
+```json
+{
+  "mcpServers": {
+    "google-ads": {
+      "command": "/Users/you/dev/google-ads-api/.venv/bin/python",
+      "args": ["/Users/you/dev/google-ads-api/googleads_mcp/server.py"]
+    }
+  }
+}
+```
+
+### Reads are open; writes go through preview → apply
+
+| | |
+|---|---|
+| **read** | `list_accounts` `find_campaigns` `find_ad_groups` `run_report` `get_guardrails` `list_my_changes` |
+| **preview** | `preview_campaign_status` `preview_campaign_daily_budget` `preview_ad_group_status` `preview_ad_group_cpc_bid` |
+| **apply** | `apply_*` (one per preview) and `revert_change` |
+
+**Separate tools, not a `dry_run` flag.** Permission rules key on the tool
+*name*, so you can permanently allowlist every `preview_*` and never allowlist
+an `apply_*`. With a flag, one "always allow" clicked during a harmless preview
+would silently authorise every future real write.
+
+Each `apply_*` takes **only** the token its own preview minted. So an apply
+cannot be called cold, a readable preview always sits directly above the
+approval prompt, and the recorded before-value is re-checked against the live
+one — a change someone made in the Google Ads UI in between is caught rather
+than silently overwritten. Tokens are single-use, expire in 10 minutes, and are
+not interchangeable between tools.
+
+### Guardrails
+
+`guardrails.toml` is committed on purpose: raising a limit becomes a diff with
+an author and a date, rather than an env var someone exported once.
+
+```toml
+[limits]
+max_daily_budget            = "100.00"
+max_budget_change_pct       = 50.0
+max_cpc_bid                 = "5.00"
+max_applies_per_session     = 20      # the one a per-call limit cannot give you
+max_projected_session_delta = "150.00"
+
+[scope]
+allowed_customer_ids = []   # empty = only GOOGLE_ADS_CUSTOMER_ID
+allowed_campaign_ids = []   # pin to one campaign for the first week
+```
+
+The **session** limits matter more than the per-call ones: a per-call ceiling
+does nothing against a loop making four hundred individually-legal changes.
+
+A failed check blocks the preview, and the token it minted cannot be applied —
+so a blocked change cannot be retried until something unrelated shifts. A
+misspelled key in the file is an error at startup, not a silently ignored line:
+a ceiling that is quietly absent reads as protection that is not there.
+
+To stop all writes immediately, create `audit/WRITES_DISABLED` with a reason in
+it. Every apply checks for it.
+
+### What the agent cannot do
+
+Creating or removing campaigns, ad groups and ads; setting anything to
+`REMOVED` (irreversible in Google Ads — pausing is the exposed path); changing
+a shared budget; anything touching billing or account access. There is no
+generic mutate/passthrough tool, so an unregistered operation is *unreachable*,
+not merely undocumented — `tests/test_mcp_surface.py` pins the registered names
+so widening the surface requires editing a test someone reviews.
+
+Every applied change lands in `audit/mcp-changes.jsonl` with a before-value;
+`list_my_changes` reads it back and `revert_change` undoes one by `entry_id`.
+
+---
+
 ## Layout
 
 ```
@@ -400,12 +480,18 @@ googleads_reporting/
     lookup.py     find an entity by name, refuse ambiguity
     budgets.py / campaigns.py / adgroups.py / ads.py
     audit.py      append-only JSONL log of every mutation
+googleads_mcp/      MCP server, for driving all of the above from an agent
+  server.py         stdio entry point and the agent-facing instructions
+  guardrails.py     per-call and per-session bounds; the kill switch
+  previews.py       preview tokens: single-use, expiring, staleness-checked
+  ledger.py         append-only record of what the agent changed
+  tools_read.py / tools_write.py
 scripts/
   generate_refresh_token.py   one-time OAuth consent
   test_connection.py          diagnostic ladder
   fetch_report.py             run a report (read)
   manage.py                   create and update (write)
-tests/                        447 tests, all offline
+tests/                        485 tests, all offline
 ```
 
 Pinned in `requirements.txt`: `google-ads==33.0.0`, which bundles API versions
@@ -526,7 +612,7 @@ queries `customer_client` from the MCC.
 ## Tests
 
 ```bash
-./.venv/bin/python -m pytest          # all 447, offline
+./.venv/bin/python -m pytest          # all 485, offline
 ```
 
 Every test runs without credentials and without network. Two kinds are worth
