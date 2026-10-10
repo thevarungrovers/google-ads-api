@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+from .. import logdb
 from ..client import build_raw_client
 from ..config import Settings
 
@@ -93,7 +94,11 @@ class MutatingGoogleAdsClient:
         if audit_log is None:
             from .audit import AuditLog
 
-            audit_log = AuditLog(settings.output_dir.parent / "audit")
+            # No path argument: the log is a table in logs/google-ads.db,
+            # resolved from the package. It used to be derived from
+            # settings.output_dir, which meant GOOGLE_ADS_OUTPUT_DIR could move
+            # this log while the MCP ledger stayed in the repo.
+            audit_log = AuditLog()
         self._audit = audit_log
 
     @classmethod
@@ -141,10 +146,14 @@ class MutatingGoogleAdsClient:
         service = self.service("GoogleAdsService")
         target = self.resolve_customer_id(customer_id)
         rows = []
-        for batch in service.search_stream(
-            customer_id=target, query=assert_select_only(gaql)
-        ):
-            rows.extend(batch.results)
+        with logdb.record_api_call(
+            "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
+        ) as slot:
+            for batch in service.search_stream(
+                customer_id=target, query=assert_select_only(gaql)
+            ):
+                rows.extend(batch.results)
+            slot["row_count"] = len(rows)
         return rows
 
     # -- the one write path ------------------------------------------------
@@ -192,7 +201,14 @@ class MutatingGoogleAdsClient:
         request.validate_only = validate_only
 
         try:
-            response = getattr(service, method)(request=request)
+            with logdb.record_api_call(
+                method,
+                service=service_name,
+                customer_id=target,
+                request={"validate_only": validate_only, "operations": list(describe or [])},
+            ) as slot:
+                response = getattr(service, method)(request=request)
+                slot["row_count"] = len(operations)
         except Exception as exc:  # noqa: BLE001 - re-raised with context
             failure = _describe_failure(exc, target, method)
             self._audit.outcome(correlation_id, ok=False, error=str(failure))

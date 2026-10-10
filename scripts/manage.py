@@ -28,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from googleads_reporting import logdb  # noqa: E402
 from googleads_reporting.config import ConfigError  # noqa: E402
 from googleads_reporting.customer_id import (  # noqa: E402
     CustomerIdError,
@@ -333,7 +334,7 @@ def run_new_campaign(client, args, target: str) -> int:
     print(f"\n{result}")
     for name in result.resource_names:
         print(f"  {name}")
-    print(f"  audit: {client.settings.output_dir.parent / 'audit'}")
+    print(f"  audit: {logdb.DB_PATH} (mutations table)")
     return 0
 
 
@@ -358,6 +359,20 @@ def confirm(plan: PlannedChange, target: str) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Wraps `_run` so one command is one `tool_calls` row.
+
+    A single invocation can send several requests -- the reads that build a
+    diff, then the mutation -- and grouping them under one row is what makes
+    the log read as "this command did this" rather than as unrelated traffic
+    that happened close together.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    label = "manage.py " + " ".join(argv[:2]) if argv else "manage.py"
+    with logdb.record_tool_call(label, {"argv": argv}):
+        return _run(argv)
+
+
+def _run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
@@ -412,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {name}")
     if result.partial_failure_error:
         print(f"  partial failure: {result.partial_failure_error}")
-    print(f"  audit: {client.settings.output_dir.parent / 'audit'}")
+    print(f"  audit: {logdb.DB_PATH} (mutations table)")
     return 0
 
 

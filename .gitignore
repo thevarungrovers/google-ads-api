@@ -29,7 +29,13 @@ data/
 output/
 
 # ---- Mutation audit logs: account data, and they are the local record ----
+# audit/ now holds only WRITES_DISABLED (the kill switch) and the retired
+# JSONL ledgers, kept frozen as a fallback. Nothing writes to them.
 audit/
+
+# ---- The log database: tool calls, API calls, changes and mutations ----
+# Real customer ids and campaign names. -wal and -shm are WAL sidecars.
+logs/
 
 # ---- OS / editor ----
 .DS_Store
