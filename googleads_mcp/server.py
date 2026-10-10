@@ -36,6 +36,7 @@ from mcp.server.mcpserver import MCPServer  # noqa: E402
 from googleads_mcp import __version__, tools_read, tools_write  # noqa: E402
 from googleads_mcp.guardrails import Limits, SessionCounters, load_limits  # noqa: E402
 from googleads_mcp.previews import PreviewStore  # noqa: E402
+from googleads_reporting import logdb  # noqa: E402
 
 SERVER_NAME = "google-ads"
 
@@ -122,8 +123,12 @@ mcp = MCPServer(
     lifespan=lifespan,
 )
 
-tools_read.register(mcp, STATE)
-tools_write.register(mcp, STATE)
+# Registered through the instrumented wrapper so every tool call lands in
+# logs/google-ads.db. `mcp` itself is what gets run; the wrapper only
+# intercepts the decorator, so the server object the SDK sees is unchanged.
+_registrar = logdb.InstrumentedServer(mcp)
+tools_read.register(_registrar, STATE)
+tools_write.register(_registrar, STATE)
 
 
 def main() -> None:

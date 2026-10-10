@@ -27,6 +27,7 @@ from googleads_reporting.client import (  # noqa: E402
     GoogleAdsReportingError,
     ReadOnlyGoogleAdsClient,
 )
+from googleads_reporting import logdb  # noqa: E402
 from googleads_reporting.config import ConfigError  # noqa: E402
 from googleads_reporting.customer_id import (  # noqa: E402
     CustomerIdError,
@@ -116,6 +117,20 @@ def resolve_date_condition(args: argparse.Namespace, report) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Wraps `_run` so one command is one `tool_calls` row.
+
+    A single invocation can send several requests -- the reads that build a
+    diff, then the mutation -- and grouping them under one row is what makes
+    the log read as "this command did this" rather than as unrelated traffic
+    that happened close together.
+    """
+    argv = list(sys.argv[1:] if argv is None else argv)
+    label = "fetch_report.py " + " ".join(argv[:2]) if argv else "fetch_report.py"
+    with logdb.record_tool_call(label, {"argv": argv}):
+        return _run(argv)
+
+
+def _run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
