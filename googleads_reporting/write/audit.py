@@ -1,47 +1,37 @@
-"""Append-only audit log for mutations.
+"""Audit log for mutations: every request this package sends to Google.
 
-Written as JSON Lines so it can be grepped, tailed and parsed without a
-dependency, and appended to rather than rewritten so a crash cannot destroy
-earlier entries.
+Rows go to the ``mutations`` table of ``logs/google-ads.db`` (see
+``googleads_reporting.logdb``). It used to be ``audit/mutations-<date>.jsonl``;
+that file is retired, frozen on disk, and nothing appends to it.
 
-Each mutation writes TWO records: ``attempt`` before the call and ``outcome``
-after it. A lone ``attempt`` with no matching ``outcome`` means the process
-died mid-request -- which is exactly the case where you need to know what was
-in flight, and exactly the case a single after-the-fact record would lose.
+Each mutation writes TWO records: an ``attempt`` before the call and an
+``outcome`` after it. A lone ``attempt`` means the process died mid-request --
+which is exactly the case where you need to know what was in flight, and
+exactly the case a single after-the-fact record would lose. In SQLite that is
+one row, inserted then updated, rather than two lines folded on read.
+
+THE DIRECTORY ARGUMENT IS GONE, deliberately. This log used to live at
+``settings.output_dir.parent / "audit"``, a path DERIVED from a configurable
+setting -- so pointing ``GOOGLE_ADS_OUTPUT_DIR`` outside the repo moved the
+library's mutation log while the MCP server's ledger, hard-coded to the repo,
+stayed behind. Two records of the same session, in two directories, and
+nothing said so. The database is resolved from the package, so that cannot
+happen now.
+
+This log records what was SENT, including ``validate_only`` dry runs that
+changed nothing. For what the agent actually changed and how to undo it, see
+``googleads_mcp/ledger.py`` and the ``changes`` table.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import socket
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+
+from .. import logdb
 
 
 class AuditLog:
-    """Appends mutation records to ``<directory>/mutations-<date>.jsonl``."""
-
-    def __init__(self, directory: Path) -> None:
-        self.directory = directory
-
-    def _path(self) -> Path:
-        self.directory.mkdir(parents=True, exist_ok=True)
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        return self.directory / f"mutations-{day}.jsonl"
-
-    def _write(self, record: dict[str, Any]) -> None:
-        path = self._path()
-        line = json.dumps(record, default=str, ensure_ascii=False)
-        # Opened per record, in append mode, and flushed: the log must survive
-        # the process dying immediately after a mutation was sent.
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+    """Appends mutation records to the ``mutations`` table."""
 
     def attempt(
         self,
@@ -53,21 +43,14 @@ class AuditLog:
         validate_only: bool,
     ) -> str:
         """Record an intent to mutate. Returns a correlation id."""
-        correlation_id = uuid.uuid4().hex
-        self._write(
-            {
-                "record": "attempt",
-                "id": correlation_id,
-                "at": datetime.now(timezone.utc).isoformat(),
-                "host": socket.gethostname(),
-                "pid": os.getpid(),
-                "customer_id": customer_id,
-                "service": service,
-                "method": method,
-                "validate_only": validate_only,
-                "operation_count": len(operations),
-                "operations": operations,
-            }
+        correlation_id = logdb.new_correlation_id()
+        logdb.insert_mutation(
+            correlation_id=correlation_id,
+            customer_id=customer_id,
+            service=service,
+            method=method,
+            operations=operations,
+            validate_only=validate_only,
         )
         return correlation_id
 
@@ -80,14 +63,10 @@ class AuditLog:
         request_id: str | None = None,
         error: str | None = None,
     ) -> None:
-        self._write(
-            {
-                "record": "outcome",
-                "id": correlation_id,
-                "at": datetime.now(timezone.utc).isoformat(),
-                "ok": ok,
-                "resource_names": resource_names or [],
-                "request_id": request_id,
-                "error": error,
-            }
+        logdb.complete_mutation(
+            correlation_id,
+            ok=ok,
+            resource_names=resource_names,
+            request_id=request_id,
+            error=error,
         )
