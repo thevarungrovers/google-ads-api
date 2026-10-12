@@ -1,4 +1,4 @@
-# Google Ads API
+# Google Ads API [![M8ven Score](https://m8ven.ai/badge/mcp/thevarungrovers/google-ads-api)](https://m8ven.ai/mcp/thevarungrovers/google-ads-api?s=readme)
 
 Pull reporting data out of a Google Ads account, and create or change campaigns,
 budgets, ad groups and ads.
