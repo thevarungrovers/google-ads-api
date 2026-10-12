@@ -33,6 +33,7 @@ from typing import Any
 
 from google.ads.googleads.client import GoogleAdsClient
 
+from . import logdb
 from .config import Settings
 from .customer_id import normalize_customer_id
 from .query import Query, assert_select_only, parse_select
@@ -144,7 +145,10 @@ class ReadOnlyGoogleAdsClient:
         report to enumerate the accounts under the MCC.
         """
         service = self._service("CustomerService")
-        response = service.list_accessible_customers()
+        with logdb.record_api_call(
+            "list_accessible_customers", service="CustomerService"
+        ):
+            response = service.list_accessible_customers()
         return [
             normalize_customer_id(name) for name in response.resource_names
         ]
@@ -161,11 +165,19 @@ class ReadOnlyGoogleAdsClient:
         gaql = self._to_gaql(query)
         target = self.resolve_customer_id(customer_id)
         service = self._service("GoogleAdsService")
-        try:
-            for batch in service.search_stream(customer_id=target, query=gaql):
-                yield from batch.results
-        except Exception as exc:  # noqa: BLE001 - re-raised with context below
-            raise self._describe_failure(exc, target, gaql) from exc
+        with logdb.record_api_call(
+            "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
+        ) as slot:
+            rows = 0
+            try:
+                for batch in service.search_stream(customer_id=target, query=gaql):
+                    for row in batch.results:
+                        rows += 1
+                        yield row
+            except Exception as exc:  # noqa: BLE001 - re-raised with context below
+                raise self._describe_failure(exc, target, gaql) from exc
+            finally:
+                slot["row_count"] = rows
 
     def search(
         self, query: Query | str, *, customer_id: str | None = None
@@ -178,10 +190,18 @@ class ReadOnlyGoogleAdsClient:
         gaql = self._to_gaql(query)
         target = self.resolve_customer_id(customer_id)
         service = self._service("GoogleAdsService")
-        try:
-            yield from service.search(customer_id=target, query=gaql)
-        except Exception as exc:  # noqa: BLE001 - re-raised with context below
-            raise self._describe_failure(exc, target, gaql) from exc
+        with logdb.record_api_call(
+            "search", service="GoogleAdsService", customer_id=target, request=gaql
+        ) as slot:
+            rows = 0
+            try:
+                for row in service.search(customer_id=target, query=gaql):
+                    rows += 1
+                    yield row
+            except Exception as exc:  # noqa: BLE001 - re-raised with context below
+                raise self._describe_failure(exc, target, gaql) from exc
+            finally:
+                slot["row_count"] = rows
 
     def rows(
         self, query: Query | str, *, customer_id: str | None = None

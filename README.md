@@ -340,9 +340,11 @@ asked to approve it. `--dry-run` stops after step 2; `--yes` skips step 3.
 | `REMOVED` warns | It is permanent in Google Ads; `PAUSED` is reversible |
 | Service allowlist | Billing and user-access services are not reachable at all |
 
-Every applied mutation is written to `audit/mutations-<date>.jsonl` — two
-records, `attempt` before the call and `outcome` after, so an attempt with no
-outcome tells you the process died mid-request.
+Every mutation is written to the `mutations` table of `logs/google-ads.db` —
+two phases, an `attempt` row before the call and the outcome filled in after,
+so an attempt with no outcome tells you the process died mid-request. That
+includes `validate_only` dry runs, which are sent to Google and change
+nothing.
 
 ### Creating a whole campaign
 
@@ -445,6 +447,84 @@ a ceiling that is quietly absent reads as protection that is not there.
 To stop all writes immediately, create `audit/WRITES_DISABLED` with a reason in
 it. Every apply checks for it.
 
+### The log database
+
+Everything this repo sends to Google is recorded in one SQLite file,
+`logs/google-ads.db`, mode 600, `logs/` gitignored. Four tables:
+
+| Table | One row per |
+|---|---|
+| `tool_calls` | MCP tool invocation, or one `scripts/` command |
+| `api_calls` | outbound call to Google, pointing at the `tool_calls` row that caused it |
+| `changes` | change the agent made, with the before-value needed to reverse it |
+| `mutations` | request the library sent, including `validate_only` dry runs |
+
+The link between the first two is the point. One tool call fans out to many API
+calls — the reads that build a diff, then the mutation — so logging only at the
+API layer gives N unrelated rows and no way to ask what the agent actually did.
+
+`changes` and `mutations` stay separate because they answer different
+questions. Of the 45 mutations migrated in from the old JSONL, **35 were
+`validate_only` dry runs** that the changes ledger never saw: sent to Google,
+checked server-side, changed nothing. A merged table would null out half its
+columns on every row.
+
+```sql
+-- the last 20 things the agent did, and what each cost in calls
+SELECT t.ts, t.tool_name, t.ok, t.duration_ms, COUNT(a.id) AS api_calls
+FROM tool_calls t LEFT JOIN api_calls a ON a.tool_call_id = t.id
+GROUP BY t.id ORDER BY t.ts DESC LIMIT 20;
+
+-- mutations that started and never reported back
+SELECT correlation_id, at, service, method FROM mutations WHERE ok IS NULL;
+```
+
+Four things worth knowing about how it is wired:
+
+- **It lives in `googleads_reporting`, not `googleads_mcp`.** The server
+  imports the library, not the other way round, and the library's own write
+  path has to log too — so the module both need belongs in the lower layer.
+- **The path comes from the package, never the working directory.** The MCP
+  server is spawned with its client's cwd, so a relative path would scatter one
+  database per directory it happened to start in.
+- **`AuditLog` no longer takes a directory.** It used to be constructed at
+  `settings.output_dir.parent / "audit"` — derived from a configurable setting
+  — while the MCP ledger was hard-coded to the repo. Pointing
+  `GOOGLE_ADS_OUTPUT_DIR` elsewhere moved one log and not the other, leaving
+  two records of one session in two directories with nothing saying so.
+- **Two error policies, on purpose.** Writes to `tool_calls`/`api_calls` never
+  raise — the server's stderr is invisible in normal use, so a logging bug
+  would be both fatal and silent. Writes to `changes`/`mutations` always raise,
+  because those are the only record of a real-money mutation.
+
+Tests never touch it: `tests/conftest.py` redirects every test to a scratch
+database, autouse. Several tests call a CLI `main()` directly, and those entry
+points are instrumented, so without that a plain `pytest` run would append rows
+to the real log indistinguishable from real activity.
+
+### Migrating off the JSONL
+
+```bash
+./.venv/bin/python scripts/migrate_ledger.py            # preview
+./.venv/bin/python scripts/migrate_ledger.py --apply
+./.venv/bin/python scripts/migrate_ledger.py --verify
+```
+
+Both retired ledgers move in: `audit/mcp-changes.jsonl` → `changes`, and every
+`audit/mutations-*.jsonl` → `mutations`. Idempotent, so a re-run after new
+writes cannot roll a row back to its state at migration time.
+
+It looks in **two** directories, which is the awkward part of this repo's
+history: the repo's own `audit/`, and the derived
+`settings.output_dir.parent / "audit"` where mutations landed whenever
+`GOOGLE_ADS_OUTPUT_DIR` was set. It also globs `*.jsonl*` rather than
+`*.jsonl`, so hand-made sidecar copies are picked up — a ledger that was ever
+rewritten by hand leaves copies beside it holding records the live file no
+longer has.
+
+Nothing is deleted. The JSONL stays frozen and unwritten as the fallback, and
+`audit/` remains because the kill switch is still a file in it.
+
 ### What the agent cannot do
 
 Creating or removing campaigns, ad groups and ads; setting anything to
@@ -454,8 +534,9 @@ generic mutate/passthrough tool, so an unregistered operation is *unreachable*,
 not merely undocumented — `tests/test_mcp_surface.py` pins the registered names
 so widening the surface requires editing a test someone reviews.
 
-Every applied change lands in `audit/mcp-changes.jsonl` with a before-value;
-`list_my_changes` reads it back and `revert_change` undoes one by `entry_id`.
+Every applied change lands in the `changes` table of `logs/google-ads.db`
+with a before-value; `list_my_changes` reads it back and `revert_change` undoes
+one by `entry_id`.
 
 ---
 
@@ -464,6 +545,7 @@ Every applied change lands in `audit/mcp-changes.jsonl` with a before-value;
 ```
 googleads_reporting/
   config.py       .env loading; blank-is-absent accessor; Settings
+  logdb.py        the SQLite log database — tool_calls, api_calls, changes, mutations
   customer_id.py  10-digit normalization
   client.py       ReadOnlyGoogleAdsClient — the enforced read-only surface
   query.py        GAQL builder, date ranges, SELECT-only assertion
@@ -479,12 +561,12 @@ googleads_reporting/
     media.py      image reading and per-slot shape checks
     lookup.py     find an entity by name, refuse ambiguity
     budgets.py / campaigns.py / adgroups.py / ads.py
-    audit.py      append-only JSONL log of every mutation
+    audit.py      writes the mutations table — every request sent to Google
 googleads_mcp/      MCP server, for driving all of the above from an agent
   server.py         stdio entry point and the agent-facing instructions
   guardrails.py     per-call and per-session bounds; the kill switch
   previews.py       preview tokens: single-use, expiring, staleness-checked
-  ledger.py         append-only record of what the agent changed
+  ledger.py         the changes table: what the agent changed, and how to undo it
   tools_read.py / tools_write.py
 scripts/
   generate_refresh_token.py   one-time OAuth consent
@@ -642,8 +724,8 @@ knowing about:
   presence and length only, and a test asserts no prefix or suffix leaks.
 - GAQL has no parameter binding, so `query.quote_literal` **refuses** values
   containing a quote, backslash or newline rather than trying to escape them.
-- Every applied change is written to `audit/mutations-<date>.jsonl` (gitignored)
-  — two records per mutation, `attempt` before and `outcome` after, so an
+- Every mutation is written to `logs/google-ads.db` (gitignored, mode 600) —
+  two phases per row, the attempt before the call and the outcome after, so an
   attempt with no outcome tells you the process died mid-request.
 - If the refresh token leaks: revoke it at
   [myaccount.google.com/permissions](https://myaccount.google.com/permissions),
