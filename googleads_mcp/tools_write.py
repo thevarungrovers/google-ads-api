@@ -57,6 +57,7 @@ from googleads_mcp.guardrails import (
     check_pct_increase,
     check_projected_delta,
     check_writes_enabled,
+    read_only_mode,
     render_checks,
     require_writes_enabled,
 )
@@ -188,6 +189,25 @@ def parse_decimal(raw: str, name: str) -> Decimal:
 
 def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definitions
     """Attach every write tool to ``mcp``."""
+
+    # Read-only mode: the preview_* tools still register, because a preview
+    # writes nothing and being able to say "here is exactly what I would
+    # change" is most of the value even when the agent cannot be the one to do
+    # it. Every apply_* and revert_change is simply never handed to the
+    # registrar, so they are absent from tools/list and unreachable over MCP --
+    # not refused at call time, ABSENT. See guardrails.read_only_mode().
+    read_only = read_only_mode()
+
+    def apply_tool(**kwargs):
+        """`mcp.tool(...)` for a write tool, or a no-op when read-only.
+
+        Returning the bare function leaves it defined and callable in-process,
+        which the tests rely on, while registering nothing -- so nothing
+        crosses the MCP boundary.
+        """
+        if read_only:
+            return lambda fn: fn
+        return mcp.tool(**kwargs)
 
     write_client = MutatingGoogleAdsClient.from_env()
     state.write_client = write_client
@@ -387,7 +407,7 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
             ),
         )
 
-    @mcp.tool(
+    @apply_tool(
         title="Apply a campaign status change (AFFECTS DELIVERY)",
         annotations=APPLY_SPENDS,
     )
@@ -498,7 +518,7 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
             ),
         )
 
-    @mcp.tool(
+    @apply_tool(
         title="Apply a campaign daily budget change (SPENDS MONEY)",
         annotations=APPLY_SPENDS,
     )
@@ -582,7 +602,7 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
             },
         )
 
-    @mcp.tool(
+    @apply_tool(
         title="Apply an ad group status change (AFFECTS DELIVERY)",
         annotations=APPLY_SPENDS,
     )
@@ -671,7 +691,7 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
             ),
         )
 
-    @mcp.tool(
+    @apply_tool(
         title="Apply an ad group CPC bid change (SPENDS MONEY)", annotations=APPLY_SPENDS
     )
     @refusals_reach_the_caller
@@ -729,7 +749,7 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
         return None
 
 
-    @mcp.tool(title="Revert a change by its ledger entry id", annotations=APPLY_REVERSIBLE)
+    @apply_tool(title="Revert a change by its ledger entry id", annotations=APPLY_REVERSIBLE)
     @refusals_reach_the_caller
     def revert_change(
         entry_id: Annotated[str, Field(description="From list_my_changes")],

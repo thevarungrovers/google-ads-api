@@ -79,6 +79,12 @@ performed here. Creating a campaign is done by a human running
 `scripts/manage.py campaign new`, because it carries media and a legal
 declaration someone has to answer for.
 
+READ-ONLY INSTALLS. If get_guardrails reports read_only_server: true, this
+process was started with GOOGLE_ADS_MCP_READ_ONLY set and published no apply_*
+tool and no revert_change at all -- they are absent from the tool list, not
+refused at call time. The preview_* tools still work, so the useful thing to do
+is show the human exactly what you would change and let them make it elsewhere.
+
 list_my_changes shows what you have already done in this account;
 revert_change undoes one by its entry_id.
 """

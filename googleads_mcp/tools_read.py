@@ -240,13 +240,24 @@ def register(mcp, state) -> None:
         Call this before proposing a change, so you propose something that can
         actually be applied rather than something that will be refused.
         """
-        from googleads_mcp.guardrails import writes_disabled
+        from googleads_mcp.guardrails import read_only_mode, writes_disabled
 
+        read_only = read_only_mode()
         return {
             "limits": state.limits.describe(),
             "session": state.counters.snapshot(),
             "writes_disabled": writes_disabled(),
+            "read_only_server": read_only,
             "pending_previews": state.previews.pending_count,
+            "note": (
+                "THIS SERVER IS READ-ONLY: it published no apply_* tools and no "
+                "revert_change, so nothing here can change the account. The "
+                "preview_* tools still work -- use them to show a human exactly "
+                "what you would change, and let them make it from a writable "
+                "client or the Google Ads UI."
+                if read_only
+                else "Session counters reset only when the server restarts."
+            ),
         }
 
     @mcp.tool(title="List changes made in this account by the server", annotations=LOCAL_ONLY)

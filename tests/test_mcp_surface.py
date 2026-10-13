@@ -149,6 +149,48 @@ def test_every_apply_takes_only_a_preview_token(tools):
         assert set(properties) == {"preview_token"}, (name, sorted(properties))
 
 
+def test_read_only_mode_publishes_no_write_tool():
+    """GOOGLE_ADS_MCP_READ_ONLY must remove every apply, and keep every preview.
+
+    Claude Code can allowlist tools by name, so there a read-only install is
+    something the CLIENT can express. Claude Desktop, Cursor and Codex have no
+    per-tool allowlist at all, so for them this is the only honest way to offer
+    one -- which makes it worth a test rather than a comment.
+
+    Run in a SUBPROCESS: registration happens at import, this module has
+    already imported the server, and re-importing would not re-register. A real
+    child process is also what every client does.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    script = (
+        "import sys, anyio, json;"
+        f"sys.path.insert(0, {str(repo)!r});"
+        "from googleads_mcp.server import mcp;"
+        "print(json.dumps(sorted(t.name for t in anyio.run(mcp.list_tools))))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "GOOGLE_ADS_MCP_READ_ONLY": "1"},
+        capture_output=True, text=True, check=True,
+    )
+    names = frozenset(json.loads(out.stdout))
+
+    assert not (names & APPLY_TOOLS), (
+        f"read-only mode still publishes write tools: {sorted(names & APPLY_TOOLS)}. "
+        f"A client with no per-tool allowlist could call them."
+    )
+    assert names == READ_TOOLS | PREVIEW_TOOLS, (
+        f"read-only mode should publish exactly the reads and previews; "
+        f"differs by {sorted(names ^ (READ_TOOLS | PREVIEW_TOOLS))}"
+    )
+
+
 def test_there_is_no_passthrough_tool(tools):
     """An unregistered operation must be unreachable, not merely undocumented."""
     for name in tools:
