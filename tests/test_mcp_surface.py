@@ -149,6 +149,60 @@ def test_every_apply_takes_only_a_preview_token(tools):
         assert set(properties) == {"preview_token"}, (name, sorted(properties))
 
 
+def test_installer_tool_list_matches_the_server(tools):
+    """install.py hardcodes the tool names. Keep that list honest.
+
+    It has to hardcode them: it is stdlib-only on purpose, so someone can run
+    it before the venv exists, which means it cannot import the server to ask.
+    The cost of that choice is a second copy of the tool set that can drift --
+    and drifting the wrong way would silently allowlist a write tool.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_installer", Path(__file__).resolve().parent.parent / "install.py"
+    )
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    assert frozenset(install.SAFE_TOOLS) == READ_TOOLS | PREVIEW_TOOLS, sorted(
+        frozenset(install.SAFE_TOOLS) ^ (READ_TOOLS | PREVIEW_TOOLS)
+    )
+    assert frozenset(install.WRITE_TOOLS) == APPLY_TOOLS, sorted(
+        frozenset(install.WRITE_TOOLS) ^ APPLY_TOOLS
+    )
+    assert not (frozenset(install.SAFE_TOOLS) & APPLY_TOOLS), (
+        "install.py would allowlist a tool that changes the account"
+    )
+    assert frozenset(install.SAFE_TOOLS) | frozenset(install.WRITE_TOOLS) == set(tools), (
+        "install.py does not account for every registered tool"
+    )
+
+
+def test_installer_never_allowlists_a_write_tool():
+    """The generated Claude Code rules, checked as strings.
+
+    A wildcard or a bare `mcp__google-ads` entry would approve the writes too.
+    Assert on what the installer produces, not on what it intends.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_installer2", Path(__file__).resolve().parent.parent / "install.py"
+    )
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    rules = [f"mcp__{install.SERVER_NAME}__{t}" for t in install.SAFE_TOOLS]
+    assert len(rules) == len(set(rules))
+    for rule in rules:
+        assert "*" not in rule, f"{rule} is a wildcard; support varies by version"
+        assert rule.rsplit("__", 1)[-1] not in APPLY_TOOLS, f"{rule} pre-approves a write"
+    assert f"mcp__{install.SERVER_NAME}" not in rules
+
+
 def test_read_only_mode_publishes_no_write_tool():
     """GOOGLE_ADS_MCP_READ_ONLY must remove every apply, and keep every preview.
 
