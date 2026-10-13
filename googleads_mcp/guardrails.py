@@ -49,6 +49,14 @@ _FLOAT_KEYS = {"max_budget_change_pct", "max_bid_increase_pct"}
 _INT_KEYS = {"max_entities_per_call", "max_applies_per_session"}
 
 
+class WritesDisabled(RuntimeError):
+    """The kill switch is set. A deliberate refusal, so its message must survive.
+
+    Its own type rather than a reused one, because this is the refusal an
+    operator most needs to read verbatim: it names the file to delete.
+    """
+
+
 class GuardrailConfigError(RuntimeError):
     """guardrails.toml is malformed. Raised at startup, never swallowed."""
 
@@ -285,6 +293,26 @@ def check_writes_enabled() -> Check:
     return Check(
         "writes_enabled", reason is None, reason or "kill switch is not set"
     )
+
+
+def require_writes_enabled() -> None:
+    """Raise if the kill switch is set. Call at APPLY time, never cached.
+
+    `check_writes_enabled()` above returns a Check for the preview's list, which
+    is the right shape there -- it shows up alongside the other bounds in the
+    text a human reads. It is the wrong shape at apply time, because a preview
+    is good for ten minutes and the switch's whole purpose is that somebody can
+    throw it from another terminal and have the very next apply stop. A switch
+    consulted only when the token was minted would let every outstanding preview
+    through after it was thrown, which is precisely the moment it is needed.
+    """
+    reason = writes_disabled()
+    if reason:
+        raise WritesDisabled(
+            f"writes are disabled: {reason}. This is the kill switch, and it was "
+            f"set after this preview was taken. Remove {KILL_SWITCH} to re-enable "
+            f"writes; do not work around it."
+        )
 
 
 def render_checks(checks: list[Check]) -> list[str]:

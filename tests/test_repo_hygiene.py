@@ -164,3 +164,85 @@ def test_no_tracked_file_contains_an_oauth_client_secret_pattern():
             if needle in text:
                 offenders.append(f"{name}: contains {needle!r}")
     assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# De-identification
+#
+# The repo is public and deliberately company-neutral. A commit titled
+# "Remove company-specific references" already did that pass once, and two
+# strings in tests/test_write_wizard.py survived it -- a real company domain
+# and a real business name, sitting in example data where nobody looks.
+#
+# A test naming the company would reintroduce exactly what it is guarding
+# against, so this checks the SHAPE instead: a hostname in a string literal
+# must be a reserved example domain or one of the Google endpoints this tool
+# genuinely talks to. A real company domain matches neither.
+#
+# The business-name half of that leak has no general shape to match, so it
+# stays a manual check. Before publishing, run:
+#     git grep -i '<company>' -- $(git ls-files)
+# --------------------------------------------------------------------------
+
+import ast as _ast
+import re as _re
+
+#: IANA keeps example.com/org/net reserved precisely for this.
+_ALLOWED_HOST_SUFFIXES = (
+    "example.com", "example.org", "example.net", "example",
+    "localhost",
+    # Endpoints the tool actually calls, plus the OAuth client-id format.
+    "google.com", "googleapis.com", "googleusercontent.com", "youtube.com",
+)
+
+#: A real TLD, not a GAQL field path. `campaign.id` and `metrics.clicks` look
+#: exactly like hostnames to a naive regex, and the codebase is full of them,
+#: so the tail has to come from a closed list rather than "two or more letters".
+_REAL_TLDS = "com|org|net|ca|io|dev|app|co|uk|fr|de|ai"
+
+_HOSTNAME = _re.compile(
+    rf"\b(?:[a-zA-Z0-9][a-zA-Z0-9-]*\.)+(?:{_REAL_TLDS})\b"
+)
+
+#: Dotted names that end in a real TLD by coincidence rather than by being a
+#: host: Python attribute chains and module paths, mostly.
+_NOT_A_HOSTNAME = _re.compile(
+    r"^(google\.ads\.|googleads|apple_ads|mcp\.|pandas\.|numpy\.)"
+    r"|^(self|row|args|op|info|ad|campaign|group|write|exc|e|x)\."
+)
+
+
+def _string_literals(source: str):
+    """Every string literal in a module, docstrings included.
+
+    Docstrings count here, unlike the forbidden-call scan: a company domain in
+    a docstring is published just as surely as one in a value.
+    """
+    return [
+        node.value
+        for node in _ast.walk(_ast.parse(source))
+        if isinstance(node, _ast.Constant) and isinstance(node.value, str)
+    ]
+
+
+def test_no_tracked_file_names_a_real_world_host():
+    """Example data must use reserved domains, not somebody's actual site."""
+    offenders = []
+    for name in sorted(f for f in tracked_files() if f.endswith(".py")):
+        path = PROJECT_ROOT / name
+        for text in _string_literals(path.read_text(encoding="utf-8")):
+            for host in _HOSTNAME.findall(text):
+                if _NOT_A_HOSTNAME.search(host):
+                    continue
+                if any(
+                    host == suffix or host.endswith("." + suffix)
+                    for suffix in _ALLOWED_HOST_SUFFIXES
+                ):
+                    continue
+                offenders.append(f"{name}: {host}")
+    assert not offenders, (
+        f"real-looking hostnames in example data: {sorted(set(offenders))}. "
+        f"Use example.com (IANA reserves it for this) unless it is an endpoint "
+        f"the tool genuinely calls, in which case add it to "
+        f"_ALLOWED_HOST_SUFFIXES."
+    )

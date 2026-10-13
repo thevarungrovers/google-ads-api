@@ -40,8 +40,8 @@ def answers(monkeypatch):
 
 
 def test_a_bare_domain_is_offered_back_with_https(answers):
-    asked = answers(["moontreal.lufa.com", "yes"])
-    assert wizard._ask_url("URL") == "https://moontreal.lufa.com"
+    asked = answers(["shop.example.com", "yes"])
+    assert wizard._ask_url("URL") == "https://shop.example.com"
     assert any("needs a scheme" in a for a in asked)
 
 
@@ -86,8 +86,8 @@ def test_the_url_question_is_asked_before_any_image_question(answers):
 
 
 def test_over_long_text_is_rejected_at_the_prompt(answers, capsys):
-    answers(["x" * 40, "Lufa Farms"])
-    assert wizard._ask_text("Business name", limit=25) == "Lufa Farms"
+    answers(["x" * 40, "Example Farms"])
+    assert wizard._ask_text("Business name", limit=25) == "Example Farms"
     assert "too long: 40 chars, max 25" in capsys.readouterr().out
 
 

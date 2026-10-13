@@ -47,6 +47,7 @@ from pydantic import Field
 from googleads_mcp import ledger
 from googleads_mcp.guardrails import (
     Check,
+    WritesDisabled,
     any_failed,
     check_campaign_in_scope,
     check_ceiling,
@@ -57,6 +58,7 @@ from googleads_mcp.guardrails import (
     check_projected_delta,
     check_writes_enabled,
     render_checks,
+    require_writes_enabled,
 )
 from googleads_mcp.previews import (
     ApplyResult,
@@ -89,6 +91,7 @@ DELIBERATE_REFUSALS = (
     PreviewExpired,
     PreviewStale,
     MutationError,
+    WritesDisabled,
 )
 
 
@@ -264,7 +267,14 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
     def commit(
         pending, *, tool: str, mutate, entity: dict[str, Any], current_before: str
     ) -> ApplyResult:
-        """Session check, staleness check, mutate, ledger. In that order."""
+        """Kill switch, staleness check, session check, mutate, ledger."""
+        # The kill switch FIRST, re-read here and never cached. The preview ran
+        # check_writes_enabled() too, but that was up to ten minutes ago, and
+        # the switch is a file precisely so somebody can throw it from another
+        # terminal mid-session. Consulting it only at mint time would let every
+        # outstanding preview through after it was set -- the one moment it has
+        # to work.
+        require_writes_enabled()
         payload = pending.payload
         if payload["before"] != current_before:
             raise PreviewStale(
@@ -697,6 +707,28 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
 
     # -- revert ------------------------------------------------------------
 
+    def _current_value(entry: dict[str, Any]) -> str | None:
+        """Today's value for a ledger entry's field, formatted as it was stored.
+
+        Returns None when the field is one this cannot read, so the caller
+        skips the staleness check rather than refusing every revert on a field
+        nobody has taught it about yet.
+        """
+        field_name, entity_id = entry["field"], entry["entity_id"]
+        is_campaign = entry["entity_type"] == "campaign"
+        if field_name == "status":
+            if is_campaign:
+                return campaigns.find(write_client, campaign_id=entity_id).campaign.status.name
+            return adgroups.find(write_client, ad_group_id=entity_id).ad_group.status.name
+        if field_name == "daily_budget":
+            row = campaigns.find(write_client, campaign_id=entity_id)
+            return f"{money(row.campaign_budget.amount_micros):.2f} {currency_of()}".strip()
+        if field_name == "cpc_bid":
+            row = adgroups.find(write_client, ad_group_id=entity_id)
+            return f"{money(row.ad_group.cpc_bid_micros):.2f} {currency_of()}".strip()
+        return None
+
+
     @mcp.tool(title="Revert a change by its ledger entry id", annotations=APPLY_REVERSIBLE)
     @refusals_reach_the_caller
     def revert_change(
@@ -708,6 +740,19 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
         stays a complete history rather than a list of things that are still
         true.
         """
+        # A revert is a real write, so it answers to the same two gates every
+        # apply_* does. It does not go through commit(), which is why they have
+        # to be repeated here rather than inherited -- and why they were missing.
+        require_writes_enabled()
+        # Zero projected delta: a revert restores a value the account already
+        # held, so it cannot push the session's spend projection anywhere. The
+        # APPLIES cap still applies, because find_entry reaches back over the
+        # whole ledger -- including changes from earlier sessions this counter
+        # has never seen -- so without it a revert loop had no bound at all.
+        blocked = state.counters.would_exceed(Decimal("0"))
+        if blocked:
+            raise PreviewExpired(blocked)
+
         entry = ledger.find_entry(entry_id)
         if entry is None:
             raise ValueError(f"No ledger entry {entry_id!r}. See list_my_changes.")
@@ -718,6 +763,21 @@ def register(mcp, state) -> None:  # noqa: C901 - a flat list of tool definition
 
         field_name = entry["field"]
         before = entry["before"]
+
+        # STALENESS, the same check commit() does and this path did not. If the
+        # value is no longer what our change left behind, somebody moved it
+        # since -- most often a person in the Google Ads UI -- and putting our
+        # old value back would silently discard THEIR change, while the ledger
+        # recorded it as a tidy undo of ours.
+        current = _current_value(entry)
+        if current is not None and current != entry["after"]:
+            raise PreviewStale(
+                f"{entry['entity_name']} {field_name} is {current!r} now, but this "
+                f"entry left it at {entry['after']!r}. Something changed it since, "
+                f"so reverting would overwrite that instead of undoing this. Look "
+                f"at list_my_changes and the Google Ads UI before deciding."
+            )
+
         new_entry = ledger.new_entry_id()
         ledger.write_intent(
             entry_id=new_entry,
