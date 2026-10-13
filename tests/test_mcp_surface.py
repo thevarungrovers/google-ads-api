@@ -68,6 +68,60 @@ def test_no_tool_takes_a_dry_run_flag(tools):
             assert flag not in properties, f"{name} exposes {flag}"
 
 
+ALL_HINTS = ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint")
+
+#: The only two tools that answer from this process without calling Google, and
+#: so the only two that carry open_world_hint=False.
+LOCAL_ONLY_TOOLS = frozenset({"get_guardrails", "list_my_changes"})
+
+
+def test_every_tool_declares_all_four_hints(tools):
+    """An omitted hint is not "unknown" -- it is the spec's default.
+
+    `destructiveHint` defaults to TRUE when absent, so a tool that forgets it is
+    published as possibly destructive and gets rendered with the same warning as
+    a budget change. Directories that index MCP servers reject a tool whose four
+    hints are not all present and boolean. Spell all four out, every time.
+    """
+    for name, tool in sorted(tools.items()):
+        assert tool.annotations is not None, f"{name} has no annotations at all"
+        for hint in ALL_HINTS:
+            value = getattr(tool.annotations, hint, None)
+            assert isinstance(value, bool), (
+                f"{name}.{hint} is {value!r}, not an explicit True/False. An "
+                f"absent hint falls back on the spec default, which for "
+                f"destructiveHint is True."
+            )
+
+
+def test_only_the_local_tools_are_closed_world(tools):
+    """open_world_hint says whether the tool reaches an external service.
+
+    get_guardrails reads config and in-memory counters; list_my_changes reads
+    the local ledger. Neither calls Google, and claiming otherwise overstates
+    what they touch.
+    """
+    for name, tool in sorted(tools.items()):
+        expected = name not in LOCAL_ONLY_TOOLS
+        assert tool.annotations.open_world_hint is expected, (
+            f"{name} open_world_hint={tool.annotations.open_world_hint}; expected "
+            f"{expected}. Only {sorted(LOCAL_ONLY_TOOLS)} answer without calling Google."
+        )
+
+
+def test_reads_and_previews_are_never_destructive(tools):
+    """They cannot be: neither writes anything to the account."""
+    for name in READ_TOOLS | PREVIEW_TOOLS:
+        assert tools[name].annotations.destructive_hint is False, name
+        assert tools[name].annotations.idempotent_hint is True, name
+
+
+def test_applies_are_never_idempotent(tools):
+    """A preview_token is single-use, so a second identical call is an error."""
+    for name in APPLY_TOOLS:
+        assert tools[name].annotations.idempotent_hint is False, name
+
+
 def test_previews_are_marked_read_only(tools):
     for name in PREVIEW_TOOLS | READ_TOOLS:
         assert tools[name].annotations.read_only_hint is True, name

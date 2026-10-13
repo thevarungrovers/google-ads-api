@@ -39,8 +39,30 @@ def refusals_reach_the_caller(fn):
     return wrapper
 
 
+# ALL FOUR HINTS, ALWAYS, ON EVERY TOOL. A hint left unset is published as
+# absent, and a client that cannot see one falls back on the spec's default --
+# which for `destructiveHint` is TRUE. So an omitted hint does not mean
+# "unknown", it means "assume the worst", and a plain `list_accounts` ends up
+# rendered with the same warning as a budget change. Some tool directories
+# reject the tool outright. Spell every one of them out, even where the value
+# looks obvious.
+#
+# READ_ONLY   queries the Google Ads API: no mutation, same answer twice.
+# LOCAL_ONLY  answers from this process and the local ledger and touches no
+#             network at all, which is the only difference -- hence
+#             open_world_hint=False.
 READ_ONLY = ToolAnnotations(
-    read_only_hint=True, idempotent_hint=True, open_world_hint=True
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
+)
+
+LOCAL_ONLY = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
 _CAMPAIGN_FIELDS = (
@@ -210,7 +232,7 @@ def register(mcp, state) -> None:
             "rows": frame.to_dict(orient="records"),
         }
 
-    @mcp.tool(title="Show the write guardrails and session budget", annotations=READ_ONLY)
+    @mcp.tool(title="Show the write guardrails and session budget", annotations=LOCAL_ONLY)
     @refusals_reach_the_caller
     def get_guardrails() -> dict[str, Any]:
         """The bounds every apply_* is checked against, and what is left.
@@ -227,7 +249,7 @@ def register(mcp, state) -> None:
             "pending_previews": state.previews.pending_count,
         }
 
-    @mcp.tool(title="List changes made in this account by the server", annotations=READ_ONLY)
+    @mcp.tool(title="List changes made in this account by the server", annotations=LOCAL_ONLY)
     @refusals_reach_the_caller
     def list_my_changes(
         limit: Annotated[int, Field(ge=1, le=200)] = 25,

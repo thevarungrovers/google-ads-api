@@ -107,8 +107,18 @@ def refusals_reach_the_caller(fn):
     return wrapper
 
 
+# All four hints here too -- see the note in tools_read.py for why an omitted
+# hint is worse than a wrong one.
+#
+# A preview reads the account, mints a token in memory and writes nothing, so it
+# is safe to allowlist. The token is single-use, but calling a preview twice just
+# produces a second token and changes nothing anybody can observe at Google's
+# end, so idempotent_hint stays True.
 PREVIEW_SAFE = ToolAnnotations(
-    read_only_hint=True, idempotent_hint=True, open_world_hint=True
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 
 #: destructive_hint is set only where the change moves money or stops delivery.
