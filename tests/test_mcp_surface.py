@@ -68,6 +68,60 @@ def test_no_tool_takes_a_dry_run_flag(tools):
             assert flag not in properties, f"{name} exposes {flag}"
 
 
+ALL_HINTS = ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint")
+
+#: The only two tools that answer from this process without calling Google, and
+#: so the only two that carry open_world_hint=False.
+LOCAL_ONLY_TOOLS = frozenset({"get_guardrails", "list_my_changes"})
+
+
+def test_every_tool_declares_all_four_hints(tools):
+    """An omitted hint is not "unknown" -- it is the spec's default.
+
+    `destructiveHint` defaults to TRUE when absent, so a tool that forgets it is
+    published as possibly destructive and gets rendered with the same warning as
+    a budget change. Directories that index MCP servers reject a tool whose four
+    hints are not all present and boolean. Spell all four out, every time.
+    """
+    for name, tool in sorted(tools.items()):
+        assert tool.annotations is not None, f"{name} has no annotations at all"
+        for hint in ALL_HINTS:
+            value = getattr(tool.annotations, hint, None)
+            assert isinstance(value, bool), (
+                f"{name}.{hint} is {value!r}, not an explicit True/False. An "
+                f"absent hint falls back on the spec default, which for "
+                f"destructiveHint is True."
+            )
+
+
+def test_only_the_local_tools_are_closed_world(tools):
+    """open_world_hint says whether the tool reaches an external service.
+
+    get_guardrails reads config and in-memory counters; list_my_changes reads
+    the local ledger. Neither calls Google, and claiming otherwise overstates
+    what they touch.
+    """
+    for name, tool in sorted(tools.items()):
+        expected = name not in LOCAL_ONLY_TOOLS
+        assert tool.annotations.open_world_hint is expected, (
+            f"{name} open_world_hint={tool.annotations.open_world_hint}; expected "
+            f"{expected}. Only {sorted(LOCAL_ONLY_TOOLS)} answer without calling Google."
+        )
+
+
+def test_reads_and_previews_are_never_destructive(tools):
+    """They cannot be: neither writes anything to the account."""
+    for name in READ_TOOLS | PREVIEW_TOOLS:
+        assert tools[name].annotations.destructive_hint is False, name
+        assert tools[name].annotations.idempotent_hint is True, name
+
+
+def test_applies_are_never_idempotent(tools):
+    """A preview_token is single-use, so a second identical call is an error."""
+    for name in APPLY_TOOLS:
+        assert tools[name].annotations.idempotent_hint is False, name
+
+
 def test_previews_are_marked_read_only(tools):
     for name in PREVIEW_TOOLS | READ_TOOLS:
         assert tools[name].annotations.read_only_hint is True, name
@@ -93,6 +147,102 @@ def test_every_apply_takes_only_a_preview_token(tools):
     for name in APPLY_TOOLS - {"revert_change"}:
         properties = (tools[name].input_schema or {}).get("properties", {})
         assert set(properties) == {"preview_token"}, (name, sorted(properties))
+
+
+def test_installer_tool_list_matches_the_server(tools):
+    """install.py hardcodes the tool names. Keep that list honest.
+
+    It has to hardcode them: it is stdlib-only on purpose, so someone can run
+    it before the venv exists, which means it cannot import the server to ask.
+    The cost of that choice is a second copy of the tool set that can drift --
+    and drifting the wrong way would silently allowlist a write tool.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_installer", Path(__file__).resolve().parent.parent / "install.py"
+    )
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    assert frozenset(install.SAFE_TOOLS) == READ_TOOLS | PREVIEW_TOOLS, sorted(
+        frozenset(install.SAFE_TOOLS) ^ (READ_TOOLS | PREVIEW_TOOLS)
+    )
+    assert frozenset(install.WRITE_TOOLS) == APPLY_TOOLS, sorted(
+        frozenset(install.WRITE_TOOLS) ^ APPLY_TOOLS
+    )
+    assert not (frozenset(install.SAFE_TOOLS) & APPLY_TOOLS), (
+        "install.py would allowlist a tool that changes the account"
+    )
+    assert frozenset(install.SAFE_TOOLS) | frozenset(install.WRITE_TOOLS) == set(tools), (
+        "install.py does not account for every registered tool"
+    )
+
+
+def test_installer_never_allowlists_a_write_tool():
+    """The generated Claude Code rules, checked as strings.
+
+    A wildcard or a bare `mcp__google-ads` entry would approve the writes too.
+    Assert on what the installer produces, not on what it intends.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_installer2", Path(__file__).resolve().parent.parent / "install.py"
+    )
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+
+    rules = [f"mcp__{install.SERVER_NAME}__{t}" for t in install.SAFE_TOOLS]
+    assert len(rules) == len(set(rules))
+    for rule in rules:
+        assert "*" not in rule, f"{rule} is a wildcard; support varies by version"
+        assert rule.rsplit("__", 1)[-1] not in APPLY_TOOLS, f"{rule} pre-approves a write"
+    assert f"mcp__{install.SERVER_NAME}" not in rules
+
+
+def test_read_only_mode_publishes_no_write_tool():
+    """GOOGLE_ADS_MCP_READ_ONLY must remove every apply, and keep every preview.
+
+    Claude Code can allowlist tools by name, so there a read-only install is
+    something the CLIENT can express. Claude Desktop, Cursor and Codex have no
+    per-tool allowlist at all, so for them this is the only honest way to offer
+    one -- which makes it worth a test rather than a comment.
+
+    Run in a SUBPROCESS: registration happens at import, this module has
+    already imported the server, and re-importing would not re-register. A real
+    child process is also what every client does.
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    script = (
+        "import sys, anyio, json;"
+        f"sys.path.insert(0, {str(repo)!r});"
+        "from googleads_mcp.server import mcp;"
+        "print(json.dumps(sorted(t.name for t in anyio.run(mcp.list_tools))))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "GOOGLE_ADS_MCP_READ_ONLY": "1"},
+        capture_output=True, text=True, check=True,
+    )
+    names = frozenset(json.loads(out.stdout))
+
+    assert not (names & APPLY_TOOLS), (
+        f"read-only mode still publishes write tools: {sorted(names & APPLY_TOOLS)}. "
+        f"A client with no per-tool allowlist could call them."
+    )
+    assert names == READ_TOOLS | PREVIEW_TOOLS, (
+        f"read-only mode should publish exactly the reads and previews; "
+        f"differs by {sorted(names ^ (READ_TOOLS | PREVIEW_TOOLS))}"
+    )
 
 
 def test_there_is_no_passthrough_tool(tools):
