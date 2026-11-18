@@ -185,6 +185,54 @@ def build_parser() -> argparse.ArgumentParser:
 _STATUS_FOR = {"pause": "PAUSED", "enable": "ENABLED", "remove": "REMOVED"}
 
 
+def _cli_name(args, requested: str, entity_type: str) -> str:
+    """A name a human creates here: ``<OWNER>-cli-<base>``, or the base as given
+    when no owner initials are set in .env. Refusals are MutationErrors, so
+    they print as a clean "error:" line."""
+    from googleads_reporting.naming import NameRefused, stamp_for_cli
+
+    try:
+        return stamp_for_cli(_identity(args), requested, entity_type=entity_type).final
+    except NameRefused as exc:
+        raise MutationError(str(exc)) from exc
+
+
+def _identity(args):
+    from googleads_reporting.naming import cli_identity
+
+    identity = getattr(args, "cli_identity", None)
+    if identity is None:
+        identity = args.cli_identity = cli_identity()
+    return identity
+
+
+def _cli_rename(client, args) -> PlannedChange:
+    """A human renaming a campaign: one that carries the CLI prefix keeps it;
+    anything else is renamed exactly as asked, never given a prefix it did
+    not have -- and no other identity's prefix is forged onto it."""
+    from googleads_reporting.naming import NameRefused, owns, parse
+
+    row = campaigns.find(client, campaign_id=args.campaign_id, name=args.name)
+    identity = _identity(args)
+    if owns(identity, row.campaign.name):
+        new_name = _cli_name(args, args.new_name, "campaign")
+    else:
+        new_name = args.new_name.strip()
+        if parse(new_name) is not None and not owns(identity, new_name):
+            raise MutationError(str(NameRefused(
+                f"{new_name!r} starts with another identity's prefix; pass a plain name.")))
+    return campaigns.plan_rename(client, new_name=new_name,
+                                 campaign_id=str(row.campaign.id))
+
+
+def naming_line(identity) -> str:
+    """The identity this command stamps, printed before anything is confirmed."""
+    if identity.prefix:
+        return (f"Naming: names created here become {identity.prefix}<name> "
+                f"(owner initials from {identity.source}).")
+    return "Naming: no owner initials in .env, so names are used exactly as given."
+
+
 def build_plan(client, args) -> PlannedChange:
     entity, action = args.entity, args.action
     override = args.override_budget_guardrail
@@ -196,10 +244,7 @@ def build_plan(client, args) -> PlannedChange:
                 campaign_id=args.campaign_id, name=args.name,
             )
         if action == "rename":
-            return campaigns.plan_rename(
-                client, new_name=args.new_name,
-                campaign_id=args.campaign_id, name=args.name,
-            )
+            return _cli_rename(client, args)
         if action == "set-budget":
             return campaigns.plan_set_budget(
                 client, amount=args.amount,
@@ -208,7 +253,7 @@ def build_plan(client, args) -> PlannedChange:
             )
         if action == "create":
             return campaigns.plan_create(
-                client, name=args.name,
+                client, name=_cli_name(args, args.name, "campaign"),
                 budget_resource_name=args.budget_resource_name,
                 channel=args.channel, status=args.status,
                 start_date=args.start_date, end_date=args.end_date,
@@ -222,7 +267,8 @@ def build_plan(client, args) -> PlannedChange:
             )
         if action == "create":
             return budgets.plan_create(
-                client, name=args.name, amount=args.amount, shared=args.shared,
+                client, name=_cli_name(args, args.name, "budget"),
+                amount=args.amount, shared=args.shared,
                 override_guardrail=override,
             )
 
@@ -239,7 +285,7 @@ def build_plan(client, args) -> PlannedChange:
             )
         if action == "create":
             return adgroups.plan_create(
-                client, name=args.name,
+                client, name=_cli_name(args, args.name, "ad_group"),
                 campaign_resource_name=args.campaign_resource_name,
                 cpc_bid=args.cpc_bid, status=args.status,
             )
@@ -291,7 +337,7 @@ def run_new_campaign(client, args, target: str) -> int:
     from googleads_reporting.write.wizard import Aborted, ask_for_campaign
 
     try:
-        spec = ask_for_campaign()
+        spec = ask_for_campaign(_identity(args))
     except Aborted as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -384,6 +430,9 @@ def _run(argv: list[str] | None = None) -> int:
 
     if args.entity == "find":
         return run_find(client, args, target)
+
+    if getattr(args, "action", None) in ("new", "create", "rename"):
+        print(naming_line(_identity(args)))
 
     if args.entity == "campaign" and args.action == "new":
         return run_new_campaign(client, args, target)

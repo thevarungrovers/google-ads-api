@@ -431,3 +431,16 @@ def rename(identity: Identity, current: str, requested: str, *, entity_type: str
             "Google Ads UI instead.",
         ))
     return out
+
+
+def cli_identity() -> Identity:
+    """What the CLI stamps: ``<OWNER>-cli-`` from .env, or nothing."""
+    return load_identity().cli()
+
+
+def stamp_for_cli(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
+    """:func:`stamp` for a human at the CLI: any problem is a refusal, at once."""
+    stamped = stamp(identity, requested, entity_type=entity_type)
+    if stamped.problems:
+        raise NameRefused("; ".join(detail for _, detail in stamped.problems))
+    return stamped
