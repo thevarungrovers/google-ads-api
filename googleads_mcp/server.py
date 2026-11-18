@@ -33,7 +33,13 @@ if str(_REPO_ROOT) not in sys.path:
 
 from mcp.server.mcpserver import MCPServer  # noqa: E402
 
-from googleads_mcp import __version__, tools_lookup, tools_read, tools_write  # noqa: E402
+from googleads_mcp import (  # noqa: E402
+    __version__,
+    tools_audit,
+    tools_lookup,
+    tools_read,
+    tools_write,
+)
 from googleads_mcp.guardrails import Limits, SessionCounters, load_limits  # noqa: E402
 from googleads_mcp.previews import PreviewStore  # noqa: E402
 from googleads_reporting import logdb  # noqa: E402
@@ -135,6 +141,7 @@ mcp = MCPServer(
 _registrar = logdb.InstrumentedServer(mcp)
 tools_read.register(_registrar, STATE)
 tools_lookup.register(_registrar, STATE)
+tools_audit.register(_registrar, STATE)
 tools_write.register(_registrar, STATE)
 
 

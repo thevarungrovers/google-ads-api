@@ -40,7 +40,7 @@ apply -> revert sequence for all of them. This module only wires them up.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -57,7 +57,9 @@ from googleads_mcp.changes.context import WriteContext
 from googleads_mcp.changes.engine import Engine, register_pair
 from googleads_mcp.errors import refusals_reach_the_caller
 from googleads_mcp.guardrails import read_only_mode
+from googleads_mcp import ledger
 from googleads_mcp.previews import ApplyResult
+from googleads_mcp.tools_read import READ_ONLY
 from googleads_reporting.write import MutatingGoogleAdsClient, adgroups, budgets, campaigns  # noqa: F401
 from googleads_reporting.write.client import MutationError  # noqa: F401 - tests raise it
 from googleads_reporting.write.plan import execute
@@ -117,5 +119,56 @@ def register(mcp, state) -> Engine:
         discard someone else's edit rather than undo this one.
         """
         return engine.revert(entry_id)
+
+    # A READ, registered here only because it needs the change kinds to know
+    # how to read each ledger field back. Published in read-only mode too.
+    @mcp.tool(title="Compare this server's changes with the live account",
+              annotations=READ_ONLY)
+    @refusals_reach_the_caller
+    def reconcile_ledger(
+        limit: Annotated[int, Field(description="Most recent N entity/field pairs",
+                                    ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        """For each entity/field this server last changed, is the live value
+        still what we left it at?
+
+        `drifted` means someone (usually a person in the Google Ads UI) changed
+        it since -- revert_change will refuse those, and a fresh preview is
+        needed before touching them. Only the latest applied, unreverted entry
+        per entity and field is checked; older ones were superseded.
+        """
+        reverted = ledger.reverted_entry_ids()
+        latest: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for entry in ledger.entries():
+            if entry.get("applied") and entry["entry_id"] not in reverted:
+                key = (entry["entity_type"], str(entry["entity_id"]), entry["field"])
+                latest.pop(key, None)  # re-insert so dict order is recency
+                latest[key] = entry
+        checked = list(latest.values())[-limit:]
+        results = []
+        for entry in reversed(checked):
+            line = {
+                "entry_id": entry["entry_id"], "at": entry["at"],
+                "entity": f"{entry['entity_type']} {entry['entity_name']}",
+                "entity_id": entry["entity_id"], "field": entry["field"],
+                "we_left_it_at": entry["after"],
+            }
+            try:
+                kind = engine.kind_for_entry(entry)
+                current = kind.current_for_entry(ctx, entry)
+            except Exception as exc:  # noqa: BLE001 - reported per row, not fatal
+                line.update(status="unreadable", detail=str(exc).splitlines()[0])
+            else:
+                if current is None:
+                    line.update(status="unreadable", detail="no reader for this field")
+                else:
+                    line.update(status="matches" if current == entry["after"] else "drifted",
+                                live_value=current)
+            results.append(line)
+        return {
+            "checked": len(results),
+            "drifted": sum(1 for r in results if r["status"] == "drifted"),
+            "entries": results,
+        }
 
     return engine

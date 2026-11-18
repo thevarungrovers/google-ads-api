@@ -31,6 +31,11 @@ READ_TOOLS = frozenset({
     "list_conversion_actions",
     "find_locations",
     "find_languages",
+    # what changed, what Google suggests, and the read-only escape hatch
+    "list_recommendations",
+    "list_recent_changes",
+    "reconcile_ledger",
+    "run_gaql",
 })
 
 PREVIEW_TOOLS = frozenset({
@@ -258,9 +263,14 @@ def test_read_only_mode_publishes_no_write_tool():
     )
 
 
+#: The one tool allowed to name a query: a READ passthrough. Deliberately listed
+#: by name -- any other tool matching the words below is still a failure.
+READ_PASSTHROUGH = frozenset({"run_gaql"})
+
+
 def test_there_is_no_passthrough_tool(tools):
     """An unregistered operation must be unreachable, not merely undocumented."""
-    for name in tools:
+    for name in set(tools) - READ_PASSTHROUGH:
         assert not any(
             word in name.lower()
             for word in ("mutate", "execute", "query", "raw", "request", "gaql")
@@ -299,3 +309,10 @@ def test_find_campaigns_status_is_an_enum_not_free_text(tools):
     options = schema.get("anyOf", [schema])
     enums = [o.get("enum") for o in options if o.get("enum")]
     assert enums == [["ENABLED", "PAUSED", "REMOVED"]], schema
+
+
+def test_the_read_passthrough_cannot_write(tools):
+    """run_gaql is read-only by construction, and annotated as such."""
+    assert tools["run_gaql"].annotations.read_only_hint is True
+    assert tools["run_gaql"].annotations.destructive_hint is False
+    assert READ_PASSTHROUGH <= READ_TOOLS

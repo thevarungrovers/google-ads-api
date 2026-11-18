@@ -360,3 +360,21 @@ def test_revert_refuses_an_entry_that_was_never_applied(wired):
 
     with pytest.raises(ToolError, match="never applied"):
         tools["revert_change"](entry_id=entry_id)
+
+
+# --------------------------------------------------------------------------
+# reconcile_ledger
+# --------------------------------------------------------------------------
+
+
+def test_reconcile_flags_a_value_someone_moved_since(wired):
+    tools, recorder = wired
+    _preview_then_apply(tools)                 # we paused it
+    recorder.row = FakeRow(status="PAUSED")
+    assert tools["reconcile_ledger"]()["drifted"] == 0
+
+    recorder.row = FakeRow(status="ENABLED")   # someone re-enabled it in the UI
+    report = tools["reconcile_ledger"]()
+    assert report["drifted"] == 1
+    assert report["entries"][0]["status"] == "drifted"
+    assert report["entries"][0]["live_value"] == "ENABLED"
