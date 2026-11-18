@@ -89,6 +89,27 @@ def test_schedule_windows_carry_their_modifier_and_are_bounded():
     assert failed(big, "max_bid_modifier_pct")
 
 
+def test_adding_a_window_to_an_existing_schedule_widens_delivery():
+    """More windows are more serving hours: the campaign's unused budget, not 0,
+    even with no bid modifier and even with a negative one."""
+    engine, client, _ = rig()
+    campaign(client)
+    criteria_rows(client, "AD_SCHEDULE", [row(**{
+        "campaign_criterion.criterion_id": 500,
+        "campaign_criterion.ad_schedule.day_of_week": "MONDAY",
+        "campaign_criterion.ad_schedule.start_hour": 8,
+        "campaign_criterion.ad_schedule.end_hour": 12,
+    })])
+    kind = engine.add(AdSchedule())
+    for modifier in (None, "-20"):
+        window = {"day": "MONDAY", "start_hour": 12, "end_hour": 20}
+        if modifier:
+            window["bid_modifier_pct"] = modifier
+        preview = engine.preview(kind, {"campaign_id": "11", "windows": [window]})
+        assert not preview.blocked, preview.checks
+        assert Decimal(preview.projected_daily_spend_delta) == Decimal("29.00")
+
+
 def test_a_percent_is_never_a_multiplier():
     assert parse_pct("+20") == Decimal("20")
     with pytest.raises(ValueError, match="between -100 and"):

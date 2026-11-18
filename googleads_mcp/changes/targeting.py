@@ -290,8 +290,9 @@ class AdSchedule(_AddCampaignCriteria):
         """Show what adding ad schedule windows would do. Writes nothing.
 
         A campaign with NO schedule serves around the clock; its first window
-        restricts it to the listed windows. Optional bid modifiers are bounded
-        by max_bid_modifier_pct."""
+        restricts it to the listed windows. Adding windows to an existing
+        schedule adds serving hours, bounded by the campaign's unused budget.
+        Optional bid modifiers are bounded by max_bid_modifier_pct."""
         specs, checks = [], []
         for w in windows:
             window = ScheduleWindow.model_validate(w) if not isinstance(w, ScheduleWindow) else w
@@ -311,8 +312,10 @@ class AdSchedule(_AddCampaignCriteria):
             "the campaign has no schedule today, i.e. it serves around the clock; "
             "adding windows restricts it to them"
         ]
+        # With windows already in place, a new one adds serving hours whatever
+        # its modifier; only a campaign's FIRST windows restrict it.
         return self._propose(ctx, campaign_id, specs, checks=checks, warnings=warnings,
-                             widens=raises, narrows=not has_any)
+                             widens=has_any or raises, narrows=not has_any)
 
     def _key(self, spec):
         return f"{spec['day']}:{spec['start_hour']}-{spec['end_hour']}"
