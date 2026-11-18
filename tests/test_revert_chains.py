@@ -510,6 +510,33 @@ def test_a_revert_row_without_the_parity_flag_is_read_off_the_ledger():
     assert kind.reapplies(orphan)
 
 
+
+@pytest.mark.parametrize("corrupt", [None, 0, "", "yes"])
+def test_a_corrupt_parity_flag_fails_toward_holding_to_the_limit(corrupt):
+    """A ``forward`` that is not a bool is not trusted: bool(None) would read
+    as "restores" and skip the per-change limit on a re-applied widening."""
+    import copy
+
+    engine, client, kind, settle = modifier_rig(0.9)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", device="DESKTOP",
+                                  bid_modifier_pct="-30")
+    settle("-30%")
+    undo = engine.revert(result.entry_id)
+    settle(ledger.find_entry(undo.entry_id)["after"])
+    redo = engine.revert(undo.entry_id)
+
+    def corrupted(entry_id):
+        entry = copy.deepcopy(ledger.find_entry(entry_id))
+        entry["detail"]["undoes"]["forward"] = corrupt
+        return entry
+
+    # Same answers as the ledger gives for rows with no flag at all.
+    assert kind.reapplies(corrupted(undo.entry_id))
+    assert not kind.reapplies(corrupted(redo.entry_id))
+    orphan = corrupted(redo.entry_id)
+    orphan["detail"]["undoes"]["entry_id"] = "gone"
+    assert kind.reapplies(orphan)
+
 # -- a created criterion: its removal is not undone by a second REMOVE ---------
 
 

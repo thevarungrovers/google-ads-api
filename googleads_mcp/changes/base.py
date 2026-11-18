@@ -262,15 +262,18 @@ def reapplies_change(entry: dict[str, Any]) -> bool:
     every revert row records under ``undoes["forward"]`` whether the row it
     undid left the account in B, and reverting it re-applies exactly then.
 
-    A revert row written before ``forward`` was recorded is read off the row
-    it undid in the ledger; if that row is gone too, it counts as a
+    A revert row written before ``forward`` was recorded, or whose flag is
+    not a bool, is read off the row it undid in the ledger; if that row is gone too, it counts as a
     re-application when the change it would put back widened.
     """
     undone = undone_change(entry)
     if undone is None:
         return False
-    if "forward" in undone:
-        return bool(undone["forward"])
+    # Only a real bool is trusted. A flag that is present but null, 0 or ""
+    # is corrupt, and bool() would read it as "restores", skipping the
+    # per-change limit; fall through to the ledger, which fails toward holding.
+    if isinstance(undone.get("forward"), bool):
+        return undone["forward"]
     from googleads_mcp import ledger
 
     previous = ledger.find_entry(undone["entry_id"]) if undone.get("entry_id") else None
