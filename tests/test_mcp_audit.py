@@ -74,3 +74,18 @@ def test_recommendations_carry_their_id_and_budget_numbers(monkeypatch):
     assert out[0]["recommendation_id"] == "ABC" and out[0]["campaign_id"] == "7"
     assert out[0]["budget"] == {"current": "10.00", "recommended": "14.00"}
     assert "recommendation.type IN ('CAMPAIGN_BUDGET')" in account.queries[-1]
+
+
+def test_recent_changes_stay_inside_googles_30_day_window(monkeypatch):
+    import datetime as dt
+
+    account = ReadAccount()
+    tools = read_tools(tools_audit, monkeypatch, account)
+    tools["list_recent_changes"](days=30)
+    gaql = account.queries[-1]
+    today = dt.date.today()
+    # change_event is refused outside the last 30 days; 29 leaves a margin for
+    # the account's time zone being behind this machine's.
+    assert f">= '{(today - dt.timedelta(days=29)).isoformat()}'" in gaql
+    # Tomorrow, so an account whose time zone is ahead does not lose today.
+    assert f"<= '{(today + dt.timedelta(days=1)).isoformat()}'" in gaql

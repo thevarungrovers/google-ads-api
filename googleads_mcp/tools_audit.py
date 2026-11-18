@@ -59,6 +59,10 @@ CHANGE_EVENT_FIELDS = (
 #: change_event refuses a query without a LIMIT, and caps it at 10,000.
 CHANGE_EVENT_MAX = 10_000
 
+#: change_event only answers for the last 30 days. One less, so an account
+#: whose time zone trails this machine's is not asked for day 31.
+CHANGE_EVENT_MAX_DAYS = 29
+
 #: Rows run_gaql will return. Anything bigger belongs in a report export.
 GAQL_MAX_ROWS = 1000
 
@@ -147,7 +151,8 @@ def register(mcp, state) -> None:
     @mcp.tool(title="List recent changes made in Google Ads by anyone", annotations=READ_ONLY)
     @refusals_reach_the_caller
     def list_recent_changes(
-        days: Annotated[int, Field(description="Look back N days (Google keeps 30)",
+        days: Annotated[int, Field(description="Look back N days (Google keeps 30; "
+                                               "clamped to 29)",
                                    ge=1, le=30)] = 7,
         campaign_id: Annotated[str | None, Field(description="Restrict to one campaign")] = None,
         limit: Annotated[int, Field(ge=1, le=1000)] = 200,
@@ -160,8 +165,13 @@ def register(mcp, state) -> None:
         """
         # Both bounds: Google's change_event examples always give a closed
         # range, and an open-ended one has been refused as missing a filter.
-        start = (dt.date.today() - dt.timedelta(days=days)).isoformat()
-        end = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+        # The lower bound is clamped inside change_event's 30-day window (29
+        # days, leaving room for the account's time zone trailing this
+        # machine's); the upper bound is tomorrow, so an account whose time
+        # zone is AHEAD does not lose the rest of its today.
+        today = dt.date.today()
+        start = (today - dt.timedelta(days=min(days, CHANGE_EVENT_MAX_DAYS))).isoformat()
+        end = (today + dt.timedelta(days=1)).isoformat()
         where = [f"change_event.change_date_time >= '{start}'",
                  f"change_event.change_date_time <= '{end}'"]
         if campaign_id:
