@@ -79,9 +79,11 @@ def wired(monkeypatch):
     """The real write tools, with every external edge replaced.
 
     Returns (tools, recorder). `recorder.mutations` is what would have been
-    sent to Google; an empty list after an apply means nothing went out.
+    APPLIED at Google; an empty list after an apply means nothing changed.
+    `recorder.validations` is the validate_only round trip every preview makes,
+    kept apart so the two can never be confused in an assertion.
     """
-    recorder = SimpleNamespace(mutations=[], row=FakeRow())
+    recorder = SimpleNamespace(mutations=[], validations=[], row=FakeRow())
 
     monkeypatch.setattr(
         tools_write.MutatingGoogleAdsClient, "from_env",
@@ -95,7 +97,7 @@ def wired(monkeypatch):
     )
 
     def fake_execute(_client, _plan, apply=False):
-        recorder.mutations.append({"apply": apply})
+        (recorder.mutations if apply else recorder.validations).append({"apply": apply})
         return SimpleNamespace(resource_names=[f"customers/1/campaigns/{CAMPAIGN_ID}"])
 
     monkeypatch.setattr(tools_write, "execute", fake_execute)
@@ -131,6 +133,33 @@ def test_a_preview_writes_nothing(wired):
     assert preview.blocked is False
     assert preview.before == "ENABLED" and preview.after == "PAUSED"
     assert recorder.mutations == [], "a preview must not send a mutation"
+    assert recorder.validations == [{"apply": False}], (
+        "a preview asks Google with validate_only, exactly once"
+    )
+
+
+def test_google_refusing_the_validate_only_call_blocks_the_preview(wired, monkeypatch):
+    """The preview reflects whether Google accepts it, not only our bounds."""
+    tools, recorder = wired
+
+    def refuse(_client, _plan, apply=False):
+        raise tools_write.MutationError("operation_access_denied: not allowed")
+
+    monkeypatch.setattr(tools_write, "execute", refuse)
+    preview = tools["preview_campaign_status"](campaign_id=CAMPAIGN_ID, new_status="PAUSED")
+
+    assert preview.blocked is True
+    assert any(
+        "google_validate_only" in line and "operation_access_denied" in line
+        for line in preview.checks
+    ), preview.checks
+
+
+def test_a_preview_blocked_by_our_own_bounds_does_not_ask_google(wired, monkeypatch):
+    tools, recorder = wired
+    monkeypatch.setattr(guardrails, "writes_disabled", lambda: "nope")
+    tools["preview_campaign_status"](campaign_id=CAMPAIGN_ID, new_status="PAUSED")
+    assert recorder.validations == []
 
 
 def test_apply_sends_the_mutation_and_records_the_ledger(wired):

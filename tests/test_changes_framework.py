@@ -124,8 +124,8 @@ def test_a_batch_writes_one_row_per_entity_sharing_one_batch_id(rig):
     assert [r["resource_name"] for r in rows] == ["words/a", "words/b", "words/c"]
     assert all(r["detail"] == {"word": r["entity_id"]} for r in rows)
     assert result.entry_ids == [r["entry_id"] for r in rows]
-    # The whole batch went out as ONE request...
-    assert [apply for apply, _ in account.sent] == [True]
+    # One validate_only round trip at preview, then the batch as ONE request...
+    assert [apply for apply, _ in account.sent] == [False, True]
     # ...and cost ONE apply, not three.
     assert engine.ctx.counters.applies == 1
 
@@ -156,7 +156,8 @@ def test_a_whole_batch_reverts_in_one_request(rig):
     reverted = engine.revert(result.batch_id)
 
     assert account.keywords == set()
-    assert len(account.sent) == 2, "the revert must be ONE request"
+    applied = [plan for apply, plan in account.sent if apply]
+    assert len(applied) == 2, "the revert must be ONE request"
     assert len(reverted.entry_ids) == 2
     reverted_ids = ledger.reverted_entry_ids()
     assert set(result.entry_ids) <= reverted_ids

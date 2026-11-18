@@ -136,7 +136,7 @@ class Engine:
         # checks pass: a blocked preview will never be applied, so asking
         # Google about it costs a request and tells nobody anything.
         if kind.validate_in_preview and not any_failed(checks):
-            checks.append(ctx.validate(kind.build(ctx, payload)))
+            checks.append(ctx.validate(lambda: kind.build(ctx, payload)))
 
         blocked = any_failed(checks)
         token = ctx.previews.mint(

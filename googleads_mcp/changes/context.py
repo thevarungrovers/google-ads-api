@@ -55,8 +55,25 @@ class WriteContext:
     def send(self, plan, *, apply: bool):
         return self._execute(self.client, plan, apply=apply)
 
-    def validate(self, plan) -> Check:  # pragma: no cover - replaced in Phase 1
-        return Check("google_validate_only", True, "not run")
+    def validate(self, build: Callable[[], Any]) -> Check:
+        """Build the mutation and send it with validate_only=True.
+
+        Google runs every server-side check -- policy, field limits, a bid
+        under the minimum, a keyword already present -- and changes nothing.
+        A refusal becomes a FAIL line in the preview the human reads, rather
+        than an error after they approved it.
+
+        Building happens in here too, because a plan function can refuse on
+        its own ("already PAUSED; nothing to do") and that refusal belongs on
+        the same line.
+        """
+        from googleads_reporting.write.client import MutationError
+
+        try:
+            self.send(build(), apply=False)
+        except (MutationError, ValueError, LookupError) as exc:
+            return Check("google_validate_only", False, str(exc).strip())
+        return Check("google_validate_only", True, "Google accepted the request (validate_only)")
 
     # -- caps (the daily half arrives with the persistent cap) -------------
 
