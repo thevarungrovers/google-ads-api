@@ -1,161 +1,162 @@
 ---
 name: google-ads
-description: Use the `google-ads` MCP server to read a Google Ads account and change it safely. Covers the preview/apply approval loop, campaign and ad group pausing, daily budgets, ad group CPC bids, performance reports, guardrails, the change ledger and undo. Use whenever the task involves Google Ads, AdWords, campaigns, ad groups, CPC bids, daily budgets, GAQL, campaign reports, or the apply_*/preview_* tools on that server.
+description: Use the `google-ads` MCP server to read a Google Ads account and change it safely. Covers the preview/apply approval loop, campaign/ad group/keyword/ad status, budgets (including shared), CPC bids, bidding strategies, keywords and negative keywords, search terms, locations, languages, ad schedule, bid modifiers, networks, audiences, responsive search ads, sitelinks/callouts/snippets, creating campaigns, Google's recommendations, labels, performance reports, GAQL, guardrails and the session/daily caps, the change ledger and undo. Use whenever the task involves Google Ads, AdWords, campaigns, ad groups, keywords, CPC bids, budgets, GAQL, reports, or the apply_*/preview_* tools on that server.
 ---
 
 # Google Ads
 
 The `google-ads` MCP server talks to **one real, live advertising account**.
-
-Campaigns are serving and spending today. A mistake costs money now, not at the
-next deploy.
+Campaigns are serving and spending today. A mistake costs money now.
 
 ## The one rule
 
 **Read → preview → show the human → apply.** Never skip a step.
 
 ```
-1. READ     find_campaigns / find_ad_groups / run_report, then get_guardrails
+1. READ     find_* / get_* / list_* / run_report, then get_guardrails
 2. PREVIEW  preview_<thing>  ->  returns a preview_token
 3. SHOW     put the preview in front of the human, in your own words
 4. APPLY    apply_<thing>(preview_token="...")
 ```
 
 Step 3 is the authorization. The human approving the `apply_*` permission prompt
-**is** the sign-off — so never call an `apply_*` without having just shown them
-what it does.
+**is** the sign-off — never call an `apply_*` without having just shown them what
+it does.
 
 ## DO
 
-- **DO start with `find_campaigns`.** Campaign and ad group ids are not shown
-  anywhere in the Google Ads web UI, so this is the only way to get one. It
-  matches on name.
-- **DO call `get_guardrails` before proposing a change.** It tells you the
-  bounds and how much of this session's budget is left, so you propose something
-  that can be approved rather than something that will be refused.
-- **DO call `run_report` first** when the change is about performance. Deciding
-  a bid without looking at what the entity has been doing is guessing.
-- **DO write money as a decimal string**: `"2.50"` is two dollars fifty.
-- **DO read the whole preview**, especially `projected_daily_spend_delta`,
-  `warnings` and `checks`.
-- **DO tell the human the `entry_id`.** It is what `revert_change` takes.
+- **DO get ids from the read tools.** The Google Ads UI shows almost none.
+  `find_campaigns`, `find_ad_groups`, `list_keywords`, `list_ads`,
+  `list_labels`, `list_audiences`, `find_locations`, `find_languages`.
+- **DO read the current state before proposing**: `get_campaign` (status
+  reasons, bidding, budget and whether it is `limited_by_budget`, networks,
+  locations, schedule) and `get_ad_group` (`bid_is_effective`, counts).
+- **DO call `get_guardrails` first.** It shows the bounds and what is left of
+  the **session** and **daily** change budgets.
+- **DO write money as a decimal string**: `"2.50"`. Bid modifiers as signed
+  percentages: `"+20"`, `"-15"`. Target ROAS as a ratio: `"4.0"` = 400%.
+- **DO read the whole preview**: `checks` (OK / FAIL / SKIP),
+  `projected_daily_spend_delta`, `warnings`, `note`, and for batches `items`.
+- **DO tell the human the `entry_id`** (and the `batch_id` for a batch). It is
+  what `revert_change` takes.
+- **DO ask the human** for the EU political advertising declaration before
+  `preview_create_campaign`. Never assume it.
 
 ## DON'T
 
-- **DON'T call an `apply_*` without showing the preview first.** The approval
-  prompt is meaningless if nobody saw what it approves.
-- **DON'T pass micros.** `"2500000"` where `"2.50"` was meant is a millionfold
-  error, and the number is rendered verbatim in the prompt a human approves. The
-  tool refuses anything over 1000 for this reason, but do not rely on that.
-- **DON'T re-use a `preview_token`.** Single use, 10 minutes, and not
-  interchangeable between tools.
-- **DON'T try to set anything to REMOVED.** It is irreversible in Google Ads and
-  is not exposed. Pause instead — same effect, and it can be undone.
-- **DON'T try to create a campaign.** It is not exposed; a human runs
-  `scripts/manage.py campaign new`, because it carries media and a legal
-  declaration someone has to answer for.
-- **DON'T work around the kill switch.** If a tool says writes are disabled, a
-  person turned them off. Say so and stop.
+- **DON'T call an `apply_*` without showing the preview first.**
+- **DON'T pass micros.** `"2500000"` for `"2.50"` is a millionfold error.
+- **DON'T re-use a `preview_token`.** Single use, 10 minutes, one tool.
+- **DON'T try to remove anything.** No status is ever set to REMOVED; pausing
+  is the undo. Created campaigns, ad groups and ads are never removed here.
+- **DON'T work around a cap or the kill switch.** Say what refused and stop.
+- **DON'T apply a recommendation without reading it** against `run_report`.
+  Google is paid by the click.
+
+## The caps
+
+| Cap | Scope | Resets |
+|---|---|---|
+| `max_applies_per_session`, `max_projected_session_delta` | this server process | on restart |
+| `max_applies_per_day`, `max_projected_delta_per_day_total` | the local calendar day, every process, from the ledger | local midnight |
+| `max_projected_delta_per_day` | one change | — |
+
+- A **batch** (20 keywords) counts as one apply. A **creation** counts as 3.
+  A **revert** counts as 1 and projects the spend it restores.
+- **Re-enabling** (campaign, ad group, keyword, ad) is exempt from the
+  per-change limit — the check reads `SKIP` — and is counted in full against the
+  daily total. The preview says "uses X of today's remaining Y".
+- Bid and budget **increases** must pass both the per-change limit and the
+  daily total. **Pausing** never uses any of it.
 
 ## The tools
-
-15 in total: 6 read, 4 `preview_*`/`apply_*` pairs, plus `revert_change`.
 
 ### Read — safe, call freely
 
 | Tool | Gives you |
 |---|---|
-| `list_accounts` | Which accounts these credentials can reach |
-| `find_campaigns(name_contains, status, limit)` | Campaigns and **their ids**, which the UI does not show |
-| `find_ad_groups(campaign_id, name_contains, limit)` | Ad groups and their ids |
-| `run_report(report, days, start_date, end_date, campaign_id, limit)` | Performance. `report` is one of `accounts`, `campaigns`, `keywords` |
-| `get_guardrails` | The bounds, and this session's remaining budget |
-| `list_my_changes(limit)` | What this server has changed, with `entry_id`s for undo |
+| `list_accounts` | Which accounts the credentials reach |
+| `find_campaigns`, `find_ad_groups` | Ids, status, budget / bid |
+| `get_campaign`, `get_ad_group` | One entity in full, with 7- and 30-day totals |
+| `run_report(report, days, ..., segment_by_date)` | `campaigns`, `ad_groups`, `keywords`, `search_terms`, `ads`, `locations`, `devices`, `hour_of_day`, `audiences`, `assets`, `conversions_by_action`, `accounts`. One row per entity unless `segment_by_date`; says `truncated` and `total_rows_available` |
+| `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists` | Keyword state and ids |
+| `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions` | Ids and text |
+| `find_locations`, `find_languages` | Geo and language ids for targeting |
+| `list_recommendations` | Google's suggestions, with impact |
+| `list_recent_changes` | Who changed what in Google Ads (UI included) |
+| `reconcile_ledger` | Which of this server's changes someone has since moved |
+| `run_gaql` | Read-only escape hatch; row-limited |
+| `get_guardrails`, `list_my_changes` | Bounds and budgets; what this server did |
 
-### Change — preview first, always
+### Change — `preview_X` / `apply_X`
 
-| Pair | Changes |
+| X | Changes |
 |---|---|
-| `preview_campaign_status` / `apply_campaign_status` | Pause or enable a **whole campaign** |
-| `preview_campaign_daily_budget` / `apply_campaign_daily_budget` | A campaign's daily budget |
-| `preview_ad_group_status` / `apply_ad_group_status` | Pause or enable an ad group |
-| `preview_ad_group_cpc_bid` / `apply_ad_group_cpc_bid` | An ad group's CPC bid |
-| `revert_change(entry_id)` | Undo one ledger entry |
+| `campaign_status`, `ad_group_status`, `keyword_status`, `ad_status` | Pause or enable |
+| `campaign_daily_budget` | A campaign's own budget |
+| `shared_budget_amount` | A shared budget; lists every campaign it feeds |
+| `ad_group_cpc_bid`, `keyword_cpc_bid` | Max CPC; warns when automated bidding ignores it |
+| `bidding_strategy` | Manual CPC / Max clicks / Max conversions (tCPA) / Max value (tROAS); resets learning |
+| `add_keywords` | Batch, one match type, created PAUSED |
+| `add_negative_keywords` | Campaign or ad group level, batch; immediate |
+| `add_to_shared_negative_list`, `link_shared_negative_list` | Shared negative lists |
+| `campaign_locations`, `campaign_languages`, `ad_schedule` | Targeting; the first one on a campaign narrows it |
+| `device_bid_modifier`, `location_bid_modifier` | Signed percentages |
+| `campaign_networks` | Search Partners, Display expansion |
+| `audience_targeting` | User lists on an ad group, in its current mode |
+| `create_responsive_search_ad` | PAUSED; 3 applies |
+| `replace_responsive_search_ad` | "Edit" an RSA: new ad + pause old, one request |
+| `add_sitelinks`, `add_callouts`, `add_structured_snippets` | Asset + link, atomic |
+| `create_campaign` | Whole Search/Display campaign, everything PAUSED; 3 applies |
+| `create_ad_group`, `rename_campaign`, `rename_ad_group` | |
+| `recommendation` | A Google recommendation, through the matching typed change |
+| `low_risk_change` | Labels, URL suffix, tracking template, dismiss a recommendation |
 
-Each `apply_*` takes **only** a `preview_token` — never the values. That is
-deliberate: it means an apply cannot be called cold, with nothing shown first.
+Plus `revert_change(entry_id)` — an `entry_id`, or a `batch_id` for a whole batch.
 
-### Not here, on purpose
+## Errors
 
-Creating or removing campaigns, ad groups and ads. Setting any status to
-REMOVED. Changing a **shared** budget, which would silently move every campaign
-using it. Anything touching billing or account access — those services are not
-on the write client's allowlist at all.
-
-There is **no generic mutate/passthrough tool**, so if an operation is not in
-the tables above it cannot be done from here. If the human needs one, say so and
-point them at `scripts/manage.py`.
-
-## Reading the preview
-
-| Field | Why it matters |
-|---|---|
-| `entity_name` / `path` | `brand - search` reads differently from `campaign 12345` |
-| `before` / `after` | In currency units, already converted out of micros |
-| `metrics_7d` | What it has actually been doing |
-| `projected_daily_spend_delta` | Upper bound on extra spend per day |
-| `checks` | One line per bound, `OK` or `FAIL` |
-| `blocked` | `true` means a guardrail failed and the apply will refuse |
-
-Two asymmetries worth repeating to the human:
-
-- **Pausing** cannot increase spend, so its projected delta is `0`.
-- **Enabling** is bounded by the **daily budget**, not by past spend — a
-  campaign that spent nothing last week can still spend its full budget tomorrow.
-
-If `blocked: true`, do not try the apply. Read the `FAIL` line and propose
-something inside the bounds.
-
-## Undo
-
-```
-revert_change(entry_id="...")
-```
-
-It refuses if the entry was never applied, if it has already been reverted, or
-if **the value has moved since** — in that last case somebody edited it in the
-Google Ads UI after your change, and reverting would discard their edit rather
-than undo yours.
-
-## When something goes wrong
-
-| Message | What it means | What to do |
+| Starts with | Means | Do |
 |---|---|---|
-| `unknown, already used, or older than 10 minutes` | Tokens are single-use | Take a fresh preview |
-| `has changed since the preview` | Somebody edited it in between | Re-preview, look at the new numbers, decide again |
-| `failed a guardrail check` | The preview was blocked | Read `checks`, propose something smaller |
-| `writes are disabled: ...` | The kill switch | A person set it. Say so and stop; do not work around it |
-| `session` limit reached | Per-session cap | Show `list_my_changes` and let the human decide |
-| `looks like micros, not currency` | You passed `2500000` for `$2.50` | Pass the decimal string |
-| `REMOVED is not available here` | Working as intended | Use `PAUSED` |
+| `AUTH_EXPIRED` | Credentials refused | Tell the human; they re-authorise |
+| `QUOTA` | Google's rate limit | Back off; do not loop |
+| `INVALID_QUERY` | Malformed request | Fix it; do not retry as is |
+| `NOT_FOUND` | No such entity | Re-read the ids |
+| `POLICY` | Ad policy refused it | Change the text it names |
+| `TRANSIENT` | Google had a moment | Retry shortly (reads already retried) |
+| `has changed since the preview` | Someone edited it | Re-preview, decide again |
+| `failed a guardrail check` | Preview was blocked | Read `checks`, propose smaller |
+| `session` / `daily` limit | A cap | Stop; show `list_my_changes` |
+| `writes are disabled` | Kill switch | A person set it; stop |
 
-## A worked example
+## Recipes
 
-> "Cut the budget on the brand search campaign to $40/day."
+**Daily check.** `get_guardrails` → `run_report(report="campaigns", days=1)` and
+`days=7` → `get_campaign` on anything `limited_by_budget` or with an odd
+`primary_status_reasons` → `list_recent_changes(days=1)` → `reconcile_ledger`.
+Report; propose nothing unless asked.
 
-```
-1. find_campaigns(name_contains="brand")   -> the id, which the UI never shows
-2. get_guardrails()                        -> max_daily_budget, max_budget_change_pct,
-                                              and how much session budget is left
-3. run_report(report="campaigns", days=30, campaign_id=...)
-                                           -> what it has actually been spending
-4. preview_campaign_daily_budget(campaign_id=..., new_daily_budget="40.00")
-5. Summarise: current budget, new budget, the 7-day numbers, the projected daily
-   delta, and any FAIL line.
-6. apply_campaign_daily_budget(preview_token="...")
-7. Report `applied` and the `entry_id` for undo.
-```
+**Wasted-spend sweep.** `run_report(report="search_terms", days=30)` → pick terms
+with cost and no conversions, not already excluded (`status`) →
+`list_negative_keywords` → `preview_add_negative_keywords` with the batch →
+show the list and its total cost → apply → hand over the `batch_id`.
 
-If step 4 comes back `blocked: true` because the cut exceeds
-`max_budget_change_pct`, do not retry it smaller without saying so — tell the
-human the bound, and what change would fit inside it.
+**Launch a new campaign.** Ask for the EU political advertising declaration →
+`preview_create_campaign` (everything PAUSED) → apply → `preview_campaign_locations`,
+`preview_campaign_languages`, `preview_add_negative_keywords` → apply each →
+when the human says go: `preview_campaign_status(ENABLED)` (counts the full
+budget against today's total) → apply.
+
+**Act on recommendations.** `list_recommendations` → check each against
+`run_report` → `preview_recommendation` for the ones worth doing (it is held to
+the typed change's bounds) → `preview_low_risk_change(resource="recommendation",
+field="dismiss")` for the rest.
+
+**Undo.** `list_my_changes` → `revert_change(entry_id)` (or the `batch_id`). It
+refuses if someone changed the value since — check `list_recent_changes`.
+
+## Read-only installs
+
+If `get_guardrails` reports `read_only_server: true`, no `apply_*` and no
+`revert_change` exist in this session. Previews still work: show the human
+exactly what you would change and let them make it elsewhere.

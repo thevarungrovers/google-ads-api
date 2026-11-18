@@ -18,16 +18,20 @@ Marking a reversible pause destructive would train someone to click through the
 loud prompts, which is how loud prompts stop working.
 
 NOT EXPOSED, deliberately:
-  - setting any status to REMOVED. It is irreversible in Google Ads, and PAUSED
-    achieves the same outcome reversibly.
-  - creating or deleting campaigns, ad groups and ads. Creation is a
-    multi-entity atomic request with media and a legal declaration attached;
-    it belongs in `scripts/manage.py campaign new`, where a human answers for
-    it, not in a tool an agent can reach.
-  - budget changes on a SHARED budget, which would silently move every campaign
-    using it.
-  - anything touching billing or account access -- those services are not on
-    the write client's allowlist at all.
+  - setting any status to REMOVED, or removing any campaign, ad group, ad or
+    budget. Pausing achieves the same outcome reversibly. The one narrow
+    removal path -- undoing a keyword / negative / criterion / link THIS
+    server created -- lives in write/criteria.plan_remove_created and is
+    reachable only through revert_change on this server's ledger rows.
+  - Google's one-click ApplyRecommendation, which would skip every bound here;
+    recommendations go through the typed kind they amount to.
+  - anything touching billing, account access or conversion actions -- those
+    services are not on the write client's allowlist at all.
+
+Creation IS exposed (campaigns, ad groups, RSAs, keywords, assets), on three
+conditions: everything starts PAUSED, each creation costs 3 applies, and the
+EU political advertising declaration is a required argument shown in the
+preview.
 
 Enforcement is structural: there is no generic ``mutate(resource, body)``
 passthrough, so an unregistered operation is unreachable rather than merely

@@ -48,42 +48,76 @@ SERVER_NAME = "google-ads"
 
 INSTRUCTIONS = """\
 Google Ads, live production account. Read freely; write only through the
-preview/apply pairs below.
+preview/apply pairs.
 
 THIS IS THE REAL ACCOUNT. Campaigns are serving and spending today. A mistake
 costs money now, not at the next deploy.
 
 HOW TO CHANGE SOMETHING
-  1. Read first. find_campaigns / find_ad_groups give you the ids (which the
-     Google Ads UI does not show), and run_report tells you what the entity has
-     actually been doing.
-  2. Call get_guardrails. It tells you the bounds and how much of this
-     session's change budget is left, so you propose something that can be
-     applied rather than something that will be refused.
-  3. Call the matching preview_* tool. It returns a readable before/after, the
-     campaign the entity sits in, its last 7 days, and an upper bound on the
-     daily spend change.
-  4. Show the human the preview, then call the apply_* tool with the
-     preview_token it returned. The human approves at that prompt -- that
-     approval IS the authorization, so never call apply_* without having just
-     shown them what it does.
+  1. Read first. find_campaigns / find_ad_groups give the ids (the Google Ads
+     UI shows almost none); get_campaign / get_ad_group give the full current
+     state; run_report says what it has actually been doing.
+  2. get_guardrails: the bounds, and what is left of this SESSION's and
+     today's budget of changes.
+  3. The matching preview_* tool. It returns before/after, where the entity
+     sits, an upper bound on added daily spend, one line per bound
+     (OK / FAIL / SKIP), and Google's own validate_only verdict.
+  4. Show the human the preview, then call apply_* with its preview_token.
+     The human approves at that prompt -- that approval IS the authorization,
+     so never call apply_* without having just shown them what it does.
 
 A preview_token is single-use, expires in 10 minutes, is not interchangeable
-between tools, and is refused if the entity's current value has moved since the
-preview was taken.
+between tools, and is refused if the entity moved since the preview.
 
 MONEY IS ALWAYS A DECIMAL STRING in major units: "2.50" means two dollars
 fifty. Never pass micros -- "2500000" would be a millionfold error, and the
-argument is rendered verbatim in the prompt a human is approving.
+argument is rendered verbatim in the prompt a human is approving. Bid
+modifiers are signed PERCENTAGES ("+20", "-15"), never multipliers. A target
+ROAS is a ratio ("4.0" = 400%).
 
-WHAT IS NOT HERE, deliberately: creating or removing campaigns, ad groups and
-ads; setting any status to REMOVED (it is irreversible in Google Ads -- pause
-instead, which is reversible and achieves the same thing); changing a SHARED
-budget; anything touching billing or account access. There is no generic
-mutate/passthrough tool, so if an operation is not listed it cannot be
-performed here. Creating a campaign is done by a human running
-`scripts/manage.py campaign new`, because it carries media and a legal
-declaration someone has to answer for.
+THE CAPS. Every apply_* and revert_change counts against two budgets:
+  session  this server process; resets when it restarts
+  daily    the LOCAL calendar day across every process, counted from the
+           change ledger; resets at local midnight
+A batch counts once; a creation counts 3; a revert counts 1 and projects the
+spend it restores. Re-ENABLING (campaign, ad group, keyword, ad) is exempt from
+the per-change max_projected_delta_per_day (shown as SKIP) and counted in full
+against the daily total instead. Bid and budget increases need both. When a
+cap refuses, stop and tell the human; do not work around it.
+
+WHAT YOU CAN CHANGE (each a preview_X / apply_X pair)
+  status         campaign_status, ad_group_status, keyword_status, ad_status
+  money          campaign_daily_budget, shared_budget_amount, ad_group_cpc_bid,
+                 keyword_cpc_bid, bidding_strategy (resets Google's learning)
+  keywords       add_keywords (created PAUSED), add_negative_keywords,
+                 add_to_shared_negative_list, link_shared_negative_list
+  targeting      campaign_locations, campaign_languages, ad_schedule,
+                 device_bid_modifier, location_bid_modifier, campaign_networks,
+                 audience_targeting
+  ads, assets    create_responsive_search_ad (PAUSED), replace_responsive_
+                 search_ad (new ad + pause old, one request), add_sitelinks,
+                 add_callouts, add_structured_snippets
+  creation       create_campaign (everything PAUSED; the EU political
+                 advertising declaration is required -- ASK the human),
+                 create_ad_group (PAUSED), rename_campaign, rename_ad_group
+  recommendation Google's recommendation, applied through the typed change it
+                 amounts to and that change's bounds
+  low_risk_change  labels, final URL suffix, tracking template, dismissing a
+                 recommendation -- a closed allowlist; nothing that spends
+
+NOTHING IS EVER REMOVED. No status is ever set to REMOVED; pausing is the undo.
+Created campaigns, ad groups and ads start PAUSED and are never removed here.
+The one exception: reverting a keyword, negative, location, link or asset link
+THIS server added removes exactly that criterion, traced through the ledger.
+Billing, account access and conversion-action edits are not reachable.
+
+ERRORS start with their class: AUTH_EXPIRED (a human must re-authorise),
+QUOTA (back off), INVALID_QUERY (fix the request), NOT_FOUND (re-read ids),
+POLICY (names the policy topic), TRANSIENT (retry; reads already retry).
+
+UNDO AND DRIFT. list_my_changes lists what this server did; revert_change takes
+an entry_id, or a batch_id to undo a whole batch. reconcile_ledger flags
+entries someone has changed since; list_recent_changes shows who.
 
 READ-ONLY INSTALLS. If get_guardrails reports read_only_server: true, this
 process was started with GOOGLE_ADS_MCP_READ_ONLY set and published no apply_*
@@ -91,8 +125,7 @@ tool and no revert_change at all -- they are absent from the tool list, not
 refused at call time. The preview_* tools still work, so the useful thing to do
 is show the human exactly what you would change and let them make it elsewhere.
 
-list_my_changes shows what you have already done in this account;
-revert_change undoes one by its entry_id.
+run_gaql is a read-only escape hatch for questions no other tool answers.
 """
 
 

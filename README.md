@@ -215,41 +215,53 @@ rejected change costs an error message instead of a half-made edit.
 
 ## What the agent can do
 
-**15 tools: 6 that read, 4 preview/apply pairs, and undo.**
+**85 tools: 26 that read, 29 preview/apply pairs, and undo.** The full,
+pinned list is in `tests/test_mcp_surface.py`; `.claude/skills/google-ads/SKILL.md`
+describes each.
 
 ### Can read (safe)
 
-| Tool | Gives you |
+| Tools | Give you |
 |---|---|
-| `list_accounts` | Which accounts the credentials reach |
-| `find_campaigns` | Campaigns **and their ids** |
-| `find_ad_groups` | Ad groups and their ids |
-| `run_report` | Performance: accounts, campaigns or keywords |
-| `get_guardrails` | The limits, and what is left of this session's budget |
-| `list_my_changes` | What the server changed, with ids for undo |
+| `list_accounts`, `find_campaigns`, `find_ad_groups` | Accounts, campaigns and ad groups **with their ids** |
+| `get_campaign`, `get_ad_group` | One entity in full: status reasons, bidding, budget (shared? limited by it?), networks, locations, schedule, 7/30-day totals |
+| `run_report` | 12 reports -- campaigns, ad groups, keywords, search terms, ads, locations, devices, hour of day, audiences, assets, conversions by action, accounts. One row per entity by default; never truncates silently |
+| `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists`, `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions`, `find_locations`, `find_languages` | Current state, and the ids the write tools take |
+| `list_recommendations`, `list_recent_changes` | Google's suggestions; who changed what in the UI |
+| `reconcile_ledger` | Which of the server's changes someone has since moved |
+| `run_gaql` | Any read-only GAQL query, row-limited |
+| `get_guardrails`, `list_my_changes` | The limits and what is left of today's and this session's budget; what the server changed |
 
 ### Can change (needs your yes)
 
-| What | Tools |
+Each is a `preview_*` / `apply_*` pair.
+
+| Area | Changes |
 |---|---|
-| Pause or enable a campaign | `preview_campaign_status` / `apply_campaign_status` |
-| A campaign's daily budget | `preview_campaign_daily_budget` / `apply_campaign_daily_budget` |
-| Pause or enable an ad group | `preview_ad_group_status` / `apply_ad_group_status` |
-| An ad group's CPC bid | `preview_ad_group_cpc_bid` / `apply_ad_group_cpc_bid` |
-| Undo one change | `revert_change` |
+| Status | Pause or enable a campaign, ad group, keyword or ad |
+| Money | Campaign daily budget, **shared** budget (lists every campaign it feeds), ad group and keyword CPC bids, bidding strategy and target CPA / ROAS |
+| Keywords | Add keywords (created paused), negative keywords at campaign or ad group level, shared negative lists |
+| Targeting | Locations, languages, ad schedule, device and location bid modifiers, Search Partners / Display expansion, audience segments |
+| Ads | Create a responsive search ad (paused), "edit" one (new ad + pause the old, in one request), sitelinks, callouts, structured snippets |
+| Creation | A whole Search or Display campaign in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames |
+| Recommendations | Act on one of Google's recommendations, held to the bounds of the change it amounts to |
+| Low-risk edits | Labels, final URL suffix, tracking template, dismissing a recommendation (one tool, closed allowlist) |
+| Undo | `revert_change` -- one entry, or a whole batch |
+
+Every creation starts **PAUSED** and costs 3 changes against the limits, so
+going live is always a separate approval.
 
 ### Cannot do at all
 
-Creating or removing campaigns, ad groups and ads. Setting anything to REMOVED.
-Changing a **shared** budget, which would quietly move every campaign using it.
-Anything touching billing or account access — those are not on the write
-client's allowlist at all.
+Removing campaigns, ad groups, ads or budgets, or setting anything to REMOVED
+-- pausing is the undo. (The one narrow exception: undoing a keyword, negative,
+location or link **the server itself added** removes exactly that criterion,
+traced through its own ledger.) Anything touching billing, account access or
+conversion-action settings -- those are not on the write client's allowlist at
+all. Video campaigns, which Google's API refuses to create.
 
 **There is no general-purpose "run any mutation" tool**, so anything without its
 own tool simply cannot be reached. A test pins the exact list.
-
-Creating a campaign is a human job (`scripts/manage.py campaign new`), because it
-carries media and a legal declaration somebody has to answer for.
 
 ---
 
@@ -261,7 +273,7 @@ carries media and a legal declaration somebody has to answer for.
 | `before` / `after` | In real money, already converted out of micros |
 | `metrics_7d` | What it has actually been doing |
 | `projected_daily_spend_delta` | Roughly how much more per day |
-| `checks` | One line per limit, `OK` or `FAIL` |
+| `checks` | One line per limit, `OK`, `FAIL` or `SKIP` -- including Google's own verdict (`google_validate_only`) and what the change uses of today's remaining total |
 | `blocked` | `true` means a limit was hit and the apply will refuse |
 
 Two things worth saying out loud when you summarise one:
@@ -301,8 +313,26 @@ change somebody can see, not an environment variable set once and forgotten.
 | `max_projected_session_delta` | 150.00 |
 
 **These are the ones that matter.** A per-change limit does nothing against a
-loop making 400 perfectly legal changes. These do. They reset only when the
-server restarts.
+loop making 400 perfectly legal changes. These do. They reset when the server
+restarts -- which is why there is also a daily limit.
+
+### 2b. Limits per day
+
+| Limit | Default |
+|---|---|
+| `max_applies_per_day` | 40 |
+| `max_projected_delta_per_day_total` | 200.00 |
+
+Counted from the change log for the **local** calendar day, across every
+server process, so a restart does not reset them. A batch counts once, a
+creation three times, an undo once. **Re-enabling** something paused is exempt
+from the per-change `max_projected_delta_per_day` and counted in full here
+instead -- otherwise a campaign with a budget over 50/day could never be turned
+back on. Keep this total at least as large as your biggest campaign budget; the
+server warns at startup if it is not.
+
+Also new: `max_target_cpa` (100.00), `max_target_change_pct` (25, either
+direction) and `max_bid_modifier_pct` (50).
 
 ### 3. Scope
 

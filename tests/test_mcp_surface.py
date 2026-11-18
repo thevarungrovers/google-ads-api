@@ -413,6 +413,22 @@ def test_the_server_instructions_state_the_workflow():
     assert "never pass micros" in text.lower()
 
 
+def test_the_instructions_cover_the_caps_removal_and_error_prefixes():
+    text = server.INSTRUCTIONS
+    for phrase in ("daily", "local midnight", "NOTHING IS EVER REMOVED", "PAUSED",
+                   "AUTH_EXPIRED", "QUOTA", "INVALID_QUERY", "NOT_FOUND", "POLICY",
+                   "TRANSIENT", "EU political"):
+        assert phrase in text, phrase
+    assert "restart the server" not in text.lower()
+
+
+def test_every_pair_is_named_in_the_instructions():
+    """An agent cannot use a tool its instructions never mention."""
+    text = server.INSTRUCTIONS.replace("\n", " ").replace(" ", "")
+    for name in PREVIEW_TOOLS:
+        assert name.removeprefix("preview_") in text, name
+
+
 def test_find_campaigns_status_is_an_enum_not_free_text(tools):
     """The value is interpolated into GAQL; a free string was injectable."""
     schema = tools["find_campaigns"].input_schema["properties"]["status"]
