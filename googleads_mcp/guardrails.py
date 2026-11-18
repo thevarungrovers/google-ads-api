@@ -46,6 +46,13 @@ DEFAULTS: dict[str, object] = {
     "max_projected_session_delta": Decimal("150.00"),
     "max_applies_per_day": 40,
     "max_projected_delta_per_day_total": Decimal("200.00"),
+    # bidding strategies: a target CPA above this is refused, and a target
+    # (CPA or ROAS) may move at most this far in one change -- Google's own
+    # guidance is ~20% at a time, or the learning period restarts
+    "max_target_cpa": Decimal("100.00"),
+    "max_target_change_pct": 25.0,
+    # location / device / schedule bid modifiers: +/- this many percent at most
+    "max_bid_modifier_pct": 50.0,
 }
 
 _DECIMAL_KEYS = {
@@ -54,8 +61,12 @@ _DECIMAL_KEYS = {
     "max_projected_delta_per_day",
     "max_projected_session_delta",
     "max_projected_delta_per_day_total",
+    "max_target_cpa",
 }
-_FLOAT_KEYS = {"max_budget_change_pct", "max_bid_increase_pct"}
+_FLOAT_KEYS = {
+    "max_budget_change_pct", "max_bid_increase_pct", "max_target_change_pct",
+    "max_bid_modifier_pct",
+}
 _INT_KEYS = {"max_entities_per_call", "max_applies_per_session", "max_applies_per_day"}
 
 
@@ -87,6 +98,9 @@ class Limits:
     max_projected_delta_per_day_total: Decimal = DEFAULTS[  # type: ignore[assignment]
         "max_projected_delta_per_day_total"
     ]
+    max_target_cpa: Decimal = DEFAULTS["max_target_cpa"]  # type: ignore[assignment]
+    max_target_change_pct: float = DEFAULTS["max_target_change_pct"]  # type: ignore[assignment]
+    max_bid_modifier_pct: float = DEFAULTS["max_bid_modifier_pct"]  # type: ignore[assignment]
     allowed_customer_ids: tuple[str, ...] = ()
     allowed_campaign_ids: tuple[str, ...] = ()
     allowed_currencies: tuple[str, ...] = ("CAD",)
@@ -103,6 +117,9 @@ class Limits:
             "max_projected_session_delta": str(self.max_projected_session_delta),
             "max_applies_per_day": self.max_applies_per_day,
             "max_projected_delta_per_day_total": str(self.max_projected_delta_per_day_total),
+            "max_target_cpa": str(self.max_target_cpa),
+            "max_target_change_pct": self.max_target_change_pct,
+            "max_bid_modifier_pct": self.max_bid_modifier_pct,
             "allowed_customer_ids": list(self.allowed_customer_ids) or
                 ["(only GOOGLE_ADS_CUSTOMER_ID)"],
             "allowed_campaign_ids": list(self.allowed_campaign_ids) or ["(all)"],
@@ -373,6 +390,21 @@ def check_pct_increase(
     pct = float((after - before) / before * 100)
     ok = pct <= ceiling_pct
     return Check(name, ok, f"{pct:+.1f}% against ceiling +{ceiling_pct:.0f}%")
+
+
+def check_abs_pct_change(
+    name: str, before: Decimal | None, after: Decimal, ceiling_pct: float
+) -> Check:
+    """Like check_pct_increase, but a move in EITHER direction counts.
+
+    For bidding targets, where a big cut is as disruptive as a big raise:
+    either one restarts Google's learning.
+    """
+    if before is None or before == 0:
+        return Check(name, True, "no previous target to compare against")
+    pct = float((after - before) / before * 100)
+    ok = abs(pct) <= ceiling_pct
+    return Check(name, ok, f"{pct:+.1f}% against +/-{ceiling_pct:.0f}%")
 
 
 def check_count(limits: Limits, count: int) -> Check:

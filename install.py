@@ -88,6 +88,8 @@ SAFE_TOOLS = (
     "preview_add_negative_keywords",
     "preview_add_to_shared_negative_list",
     "preview_link_shared_negative_list",
+    "preview_bidding_strategy",
+    "preview_shared_budget_amount",
 )
 
 #: The tools that move real money. Never allowlisted, by any answer to anything.
@@ -103,6 +105,8 @@ WRITE_TOOLS = (
     "apply_add_negative_keywords",
     "apply_add_to_shared_negative_list",
     "apply_link_shared_negative_list",
+    "apply_bidding_strategy",
+    "apply_shared_budget_amount",
 )
 
 READ_ONLY_ENV = "GOOGLE_ADS_MCP_READ_ONLY"

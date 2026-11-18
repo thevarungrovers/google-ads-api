@@ -50,6 +50,9 @@ PREVIEW_TOOLS = frozenset({
     "preview_add_negative_keywords",
     "preview_add_to_shared_negative_list",
     "preview_link_shared_negative_list",
+    # bidding and budgets
+    "preview_bidding_strategy",
+    "preview_shared_budget_amount",
 })
 
 APPLY_TOOLS = frozenset({
@@ -64,6 +67,9 @@ APPLY_TOOLS = frozenset({
     "apply_add_negative_keywords",
     "apply_add_to_shared_negative_list",
     "apply_link_shared_negative_list",
+    # bidding and budgets
+    "apply_bidding_strategy",
+    "apply_shared_budget_amount",
     "revert_change",
 })
 

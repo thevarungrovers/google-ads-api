@@ -141,7 +141,8 @@ class CampaignDailyBudget(ChangeKind):
                 "budget_not_shared",
                 not shared,
                 "exclusive to this campaign" if not shared
-                else "SHARED -- would change every campaign using it",
+                else "SHARED -- would change every campaign using it; use "
+                "preview_shared_budget_amount, which lists them",
             ),
         ]
         warnings = []

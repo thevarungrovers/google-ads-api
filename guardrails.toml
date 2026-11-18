@@ -35,6 +35,11 @@ max_projected_session_delta = "150.00"
 max_applies_per_day               = 40
 max_projected_delta_per_day_total = "200.00"
 
+# --- bidding and targeting ---------------------------------------------------
+max_target_cpa         = "100.00"  # ceiling on a Maximize Conversions target CPA
+max_target_change_pct  = 25.0      # how far a CPA/ROAS target may move at once
+max_bid_modifier_pct   = 50.0      # location/device/schedule modifiers: +/- this
+
 [scope]
 # Customer ids the server may touch, as bare 10-digit strings. EMPTY means
 # "whatever GOOGLE_ADS_CUSTOMER_ID in .env points at, and nothing else" -- which

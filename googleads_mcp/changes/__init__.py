@@ -14,6 +14,7 @@ from googleads_mcp.changes.base import ChangeKind
 def all_kinds() -> list[ChangeKind]:
     """Every published kind, in the order the tools are registered."""
     from googleads_mcp.changes.adgroups import AdGroupCpcBid, AdGroupStatus
+    from googleads_mcp.changes.bidding import BiddingStrategy, SharedBudgetAmount
     from googleads_mcp.changes.campaigns import CampaignDailyBudget, CampaignStatus
     from googleads_mcp.changes.keywords import (
         AddKeywords,
@@ -36,6 +37,9 @@ def all_kinds() -> list[ChangeKind]:
         AddNegativeKeywords(),
         AddToSharedNegativeList(),
         LinkSharedNegativeList(),
+        # bidding and budgets
+        BiddingStrategy(),
+        SharedBudgetAmount(),
     ]
 
 
