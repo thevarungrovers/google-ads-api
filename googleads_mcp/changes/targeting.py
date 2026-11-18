@@ -34,10 +34,38 @@ def parse_pct(raw: str, name: str = "bid_modifier_pct") -> Decimal:
     return value.quantize(Decimal("1"))
 
 
+def multiplier(pct: Decimal) -> Decimal:
+    """+20 -> 1.2, -100 -> 0: what Google actually multiplies the bid by."""
+    return (Decimal("100") + pct) / Decimal("100")
+
+
 def modifier_check(ctx, pct: Decimal) -> Check:
+    """The ABSOLUTE bound: the new modifier itself within +/-ceiling."""
     ceiling = ctx.limits.max_bid_modifier_pct
     return Check("max_bid_modifier_pct", abs(float(pct)) <= ceiling,
                  f"{render_pct(pct)} against +/-{ceiling:.0f}%")
+
+
+def modifier_change_checks(ctx, before: Decimal, after: Decimal) -> list[Check]:
+    """The absolute bound AND a bound on the CHANGE.
+
+    The absolute bound alone lets -50% -> 0% through, which doubles every bid
+    it touches. So the relative increase in the multiplier must also stay
+    within max_bid_modifier_pct. Lifting an exclusion (from 0) has no ratio;
+    it is projected as resumed serving instead (see modifier_projection).
+    """
+    ceiling = ctx.limits.max_bid_modifier_pct
+    old, new = multiplier(before), multiplier(after)
+    if old == 0:
+        change = Check("max_bid_modifier_increase_pct", True,
+                       "lifts an exclusion: no ratio, projected as resumed serving",
+                       skipped=True)
+    else:
+        rise = (new / old - 1) * 100
+        change = Check("max_bid_modifier_increase_pct", float(rise) <= ceiling,
+                       f"multiplier {old:.2f} -> {new:.2f} ({rise:+.0f}%) "
+                       f"against +{ceiling:.0f}%")
+    return [modifier_check(ctx, after), change]
 
 
 def _modifier_pct(criterion) -> Decimal:
@@ -58,10 +86,12 @@ def modifier_projection(ctx, campaign_id: str, before: Decimal, after: Decimal,
             f"{where} is EXCLUDED today (-100%); this resumes serving there, "
             "up to the campaign's unused budget"
         ]
-    if after > 0:
+    # From the move in the multiplier, not the sign of the new value: -50% ->
+    # -10% raises every bid it touches, +40% -> +10% lowers them.
+    if multiplier(after) > multiplier(before):
         projected, note = campaign_headroom(ctx, campaign_id)
         return projected, note, []
-    return Decimal("0"), "A cut can only reduce spend.", []
+    return Decimal("0"), "A lower multiplier can only reduce spend.", []
 
 
 def _campaign(ctx, campaign_id: str):
@@ -310,9 +340,11 @@ class DeviceBidModifier(ChangeKind):
     ) -> Proposal:
         """Show what a device bid modifier would do. Writes nothing.
 
-        Bounded by max_bid_modifier_pct either way. A raise projects the
-        campaign's unused budget; a cut projects 0. "-100" stops serving on
-        that device entirely and needs the limit raised to 100."""
+        Bounded by max_bid_modifier_pct either way, and so is the relative
+        increase in the multiplier versus today (-50% -> 0% doubles bids). A
+        higher multiplier than today projects the campaign's unused budget; a
+        lower one projects 0. "-100" stops serving on that device entirely and
+        needs the limit raised to 100."""
         pct = parse_pct(bid_modifier_pct)
         row = _campaign(ctx, campaign_id)
         before, criterion_id = self._state(ctx, campaign_id, device)
@@ -323,7 +355,7 @@ class DeviceBidModifier(ChangeKind):
             entity_type="campaign", entity_id=f"{campaign_id}~{device}",
             entity_name=f"{row.campaign.name} on {device}", path=row.campaign.name,
             field_name="device_bid_modifier", before=before, after=render_pct(pct),
-            checks=[modifier_check(ctx, pct)], projected=projected,
+            checks=modifier_change_checks(ctx, before_pct, pct), projected=projected,
             campaign_id=str(row.campaign.id), note=note, warnings=warnings,
             items=[LedgerItem("campaign", f"{campaign_id}~{device}",
                               f"{row.campaign.name} on {device}", "device_bid_modifier",
@@ -396,7 +428,8 @@ class LocationBidModifier(ChangeKind):
         bid_modifier_pct: Annotated[str, Field(description='Signed percent, e.g. "+15"')],
     ) -> Proposal:
         """Show what a bid modifier on one targeted location would do. Writes
-        nothing. Bounded by max_bid_modifier_pct either way."""
+        nothing. Bounded by max_bid_modifier_pct either way, and so is the
+        relative increase in the multiplier versus today."""
         pct = parse_pct(bid_modifier_pct)
         found = self._row(ctx, campaign_id, criterion_id)
         geo = found.campaign_criterion.location.geo_target_constant
@@ -408,7 +441,8 @@ class LocationBidModifier(ChangeKind):
             entity_name=f"{geo} on {found.campaign.name}", path=found.campaign.name,
             field_name="bid_modifier",
             before=render_pct(before_pct),
-            after=render_pct(pct), checks=[modifier_check(ctx, pct)], projected=projected,
+            after=render_pct(pct), checks=modifier_change_checks(ctx, before_pct, pct),
+            projected=projected,
             campaign_id=str(campaign_id), note=note, warnings=warnings,
             payload={"campaign_id": str(campaign_id), "criterion_id": str(criterion_id),
                      "pct": str(pct)},

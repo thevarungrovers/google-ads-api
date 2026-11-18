@@ -263,3 +263,63 @@ def test_an_excluded_location_is_an_unexclusion_and_reverts_to_the_exclusion():
     engine.revert(result.entry_id)
     op = client.applied[-1]["operations"][0]
     assert "bid_modifier" in op.update and op.update.bid_modifier == 0.0
+
+
+# ---------------------------------------------------------------------------
+# A modifier change is judged by how the MULTIPLIER moves, not by its sign
+# ---------------------------------------------------------------------------
+
+
+def device_modifier(client, modifier: float, device: str = "DESKTOP"):
+    criteria_rows(client, "DEVICE", [row(**{
+        "campaign_criterion.criterion_id": 30001, "campaign_criterion.bid_modifier": modifier,
+        "campaign_criterion.device.type_": device,
+    })])
+
+
+def test_a_smaller_cut_is_an_increase_and_projects_headroom():
+    engine, client, _ = rig()
+    campaign(client)
+    device_modifier(client, 0.5)
+    kind = engine.add(DeviceBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "device": "DESKTOP",
+                                    "bid_modifier_pct": "-30"})
+    assert preview.before == "-50%"
+    assert Decimal(preview.projected_daily_spend_delta) == Decimal("29.00")
+
+
+def test_a_smaller_raise_is_a_cut_and_projects_nothing():
+    engine, client, _ = rig()
+    campaign(client)
+    device_modifier(client, 1.4)
+    kind = engine.add(DeviceBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "device": "DESKTOP",
+                                    "bid_modifier_pct": "+10"})
+    assert Decimal(preview.projected_daily_spend_delta) == 0
+
+
+def test_the_relative_increase_in_multiplier_is_bounded_too():
+    # -50% -> 0% doubles the multiplier (0.5 -> 1.0): a +100% increase, even
+    # though both values sit well inside +/-50%.
+    engine, client, _ = rig()
+    campaign(client)
+    device_modifier(client, 0.5)
+    kind = engine.add(DeviceBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "device": "DESKTOP",
+                                    "bid_modifier_pct": "0"})
+    assert failed(preview, "max_bid_modifier_increase_pct")
+    assert not failed(preview, "max_bid_modifier_pct")
+    ok = engine.preview(kind, {"campaign_id": "11", "device": "DESKTOP",
+                               "bid_modifier_pct": "-30"})
+    assert not ok.blocked, ok.checks
+
+
+def test_a_location_modifier_is_judged_by_the_multiplier_move():
+    engine, client, _ = rig()
+    campaign(client)
+    excluded_location(client, modifier=0.5)
+    kind = engine.add(LocationBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "criterion_id": "1000",
+                                    "bid_modifier_pct": "-10"})
+    assert Decimal(preview.projected_daily_spend_delta) == Decimal("29.00")
+    assert failed(preview, "max_bid_modifier_increase_pct")
