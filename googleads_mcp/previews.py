@@ -56,6 +56,12 @@ class ChangePreview(BaseModel):
     blocked: bool = Field(description="True when a check failed; apply would refuse")
     warnings: list[str] = []
     note: str | None = None
+    items: list[dict[str, Any]] | None = Field(
+        default=None, description="For a batch: one entry per entity it touches"
+    )
+    apply_weight: int = Field(
+        default=1, description="Applies this costs against the session and daily caps"
+    )
 
 
 class ApplyResult(BaseModel):
@@ -71,6 +77,17 @@ class ApplyResult(BaseModel):
     after: str
     resource_name: str | None = None
     session: dict[str, Any] = Field(description="Session budget left after this")
+    batch_id: str | None = Field(
+        default=None,
+        description="For a batch: pass to revert_change to undo the whole batch",
+    )
+    entry_ids: list[str] = Field(
+        default=[], description="For a batch: one ledger id per entity"
+    )
+    resource_names: list[str] = []
+    daily: dict[str, Any] | None = Field(
+        default=None, description="Today's change budget left after this"
+    )
 
 
 class PreviewExpired(RuntimeError):

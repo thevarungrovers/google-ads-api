@@ -183,9 +183,12 @@ class SessionCounters:
     def limits(self) -> Limits:
         return self._limits
 
-    def would_exceed(self, projected_delta: Decimal) -> str | None:
-        """Why this apply would break the session budget, or None."""
-        if self.applies + 1 > self._limits.max_applies_per_session:
+    def would_exceed(self, projected_delta: Decimal, weight: int = 1) -> str | None:
+        """Why this apply would break the session budget, or None.
+
+        ``weight`` is what the apply costs: 1 for most, more for a creation.
+        """
+        if self.applies + weight > self._limits.max_applies_per_session:
             return (
                 f"session apply limit reached: {self.applies} of "
                 f"{self._limits.max_applies_per_session} already used. Restart "
@@ -200,8 +203,8 @@ class SessionCounters:
             )
         return None
 
-    def record(self, projected_delta: Decimal) -> None:
-        self.applies += 1
+    def record(self, projected_delta: Decimal, weight: int = 1) -> None:
+        self.applies += weight
         self.projected_delta += max(projected_delta, Decimal("0"))
 
     def snapshot(self) -> dict[str, object]:

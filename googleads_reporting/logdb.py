@@ -152,7 +152,10 @@ CREATE TABLE IF NOT EXISTS changes (
     outcome_at                  TEXT,
     resource_name               TEXT,
     error                       TEXT,
-    reverts                     TEXT
+    reverts                     TEXT,
+    batch_id                    TEXT,
+    detail_json                 TEXT,
+    apply_weight                INTEGER
 );
 
 -- Every mutation the library sent, from any caller, including dry runs.
@@ -182,6 +185,26 @@ CREATE INDEX IF NOT EXISTS idx_changes_at       ON changes(at);
 CREATE INDEX IF NOT EXISTS idx_changes_reverts  ON changes(reverts);
 CREATE INDEX IF NOT EXISTS idx_mutations_at     ON mutations(at);
 """
+
+#: Columns added to `changes` after the first release, with their types.
+#: `CREATE TABLE IF NOT EXISTS` never alters a table that is already there, so
+#: an existing logs/google-ads.db would silently lack these and the first
+#: batch write would fail with "table changes has no column named batch_id".
+#: connect() adds whichever are missing. Additive and nullable only: a column
+#: that needed a backfill would not belong in a list like this.
+#:
+#:   batch_id      shared by every row one batch apply wrote (keywords,
+#:                 negatives, locations), so the batch counts as ONE apply
+#:                 against the daily cap and can be reverted in one call
+#:   detail_json   what the inverse needs beyond before/after -- the criterion
+#:                 a keyword add created, the old ad a replacement paused
+#:   apply_weight  how many applies this row costs against the caps; creation
+#:                 costs 3 so an agent cannot build out an account in a loop
+_CHANGES_ADDED_COLUMNS = (
+    ("batch_id", "TEXT"),
+    ("detail_json", "TEXT"),
+    ("apply_weight", "INTEGER"),
+)
 
 # One connection per thread. The MCP SDK runs sync tools on a worker thread, and
 # a sqlite3 connection may only be used from the thread that created it.
@@ -246,6 +269,11 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=10000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    present = {row[1] for row in conn.execute("PRAGMA table_info(changes)")}
+    for column, kind in _CHANGES_ADDED_COLUMNS:
+        if column not in present:
+            conn.execute(f"ALTER TABLE changes ADD COLUMN {column} {kind}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_changes_batch ON changes(batch_id)")
     conn.execute(
         "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO NOTHING",
@@ -538,13 +566,17 @@ def insert_change(
     before: str,
     after: str,
     projected_delta: str,
+    batch_id: str | None = None,
+    detail: Any = None,
+    weight: int = 1,
 ) -> None:
     """Record what we are ABOUT to change. Call before the mutation is sent."""
     connect().execute(
         "INSERT INTO changes"
         "(entry_id, tool_call_id, at, pid, tool, customer_id, entity_type, entity_id, "
-        " entity_name, field, before, after, projected_daily_spend_delta) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " entity_name, field, before, after, projected_daily_spend_delta, "
+        " batch_id, detail_json, apply_weight) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             entry_id,
             _current_tool_call.get(),
@@ -559,6 +591,9 @@ def insert_change(
             before,
             after,
             projected_delta,
+            batch_id,
+            None if detail is None else json.dumps(detail, default=str),
+            int(weight),
         ),
     )
 
@@ -604,6 +639,9 @@ def _row_to_entry(row: sqlite3.Row) -> dict[str, Any]:
         "resource_name": row["resource_name"],
         "error": row["error"],
         "reverts": row["reverts"],
+        "batch_id": row["batch_id"],
+        "detail": _loads(row["detail_json"]),
+        "weight": row["apply_weight"] or 1,
     }
 
 
@@ -617,6 +655,37 @@ def change_entries() -> list[dict[str, Any]]:
         _row_to_entry(row)
         for row in connect().execute("SELECT * FROM changes ORDER BY at, rowid")
     ]
+
+
+def batch_changes(batch_id: str) -> list[dict[str, Any]]:
+    """Every row one batch apply wrote, oldest first."""
+    return [
+        _row_to_entry(row)
+        for row in connect().execute(
+            "SELECT * FROM changes WHERE batch_id=? ORDER BY at, rowid", (batch_id,)
+        )
+    ]
+
+
+def successful_changes_since(since_utc_iso: str) -> list[dict[str, Any]]:
+    """Applied changes at or after ``since_utc_iso``, for the daily cap.
+
+    The bound is a UTC ISO string because that is how ``at`` is stored
+    (``_now()``), so the comparison is a plain string compare that the
+    ``idx_changes_at`` index serves. The CALLER decides where the day starts --
+    local midnight, converted to UTC -- because "today" is a local notion and
+    this module only knows UTC.
+
+    ``ok = 1`` only: a write Google refused spent nothing and must not eat the
+    day's budget. A row whose outcome never arrived (ok IS NULL) is excluded
+    too, which errs towards allowing -- but such a row means the process died
+    mid-request, which can happen at most once per process.
+    """
+    rows = connect().execute(
+        "SELECT * FROM changes WHERE at >= ? AND ok = 1 ORDER BY at, rowid",
+        (since_utc_iso,),
+    )
+    return [_row_to_entry(row) for row in rows]
 
 
 def find_change(entry_id: str) -> dict[str, Any] | None:

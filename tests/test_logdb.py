@@ -457,3 +457,34 @@ def test_legacy_audit_dirs_includes_the_derived_output_directory(tmp_path, monke
 class _FakeSettings:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = output_dir
+
+
+def test_an_existing_database_gains_the_batch_columns(tmp_path):
+    """CREATE TABLE IF NOT EXISTS never alters a table that is already there.
+
+    The operator's logs/google-ads.db predates batch_id / detail_json /
+    apply_weight; without the ALTERs in connect() the first batch apply would
+    die on "table changes has no column named batch_id".
+    """
+    path = tmp_path / "old" / "google-ads.db"
+    path.parent.mkdir()
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE changes (entry_id TEXT PRIMARY KEY, tool_call_id INTEGER, "
+        "at TEXT NOT NULL, pid INTEGER, tool TEXT NOT NULL, customer_id TEXT, "
+        "entity_type TEXT, entity_id TEXT, entity_name TEXT, field TEXT, before TEXT, "
+        "after TEXT, projected_daily_spend_delta TEXT, ok INTEGER, outcome_at TEXT, "
+        "resource_name TEXT, error TEXT, reverts TEXT)"
+    )
+    old.execute("INSERT INTO changes(entry_id, at, tool) VALUES('legacy', 't', 'x')")
+    old.commit()
+    old.close()
+
+    logdb.reset_for_tests(path)
+    an_intent("new", batch_id="b1", detail={"k": 1}, weight=3)
+
+    rows = {e["entry_id"]: e for e in logdb.change_entries()}
+    assert rows["legacy"]["batch_id"] is None and rows["legacy"]["weight"] == 1
+    assert rows["new"]["batch_id"] == "b1"
+    assert rows["new"]["detail"] == {"k": 1}
+    assert rows["new"]["weight"] == 3

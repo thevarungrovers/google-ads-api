@@ -43,6 +43,7 @@ LEGACY_LEDGER_PATH = LEGACY_LEDGER_DIR / "mcp-changes.jsonl"
 new_entry_id = logdb.new_entry_id
 entries = logdb.change_entries
 find_entry = logdb.find_change
+batch_entries = logdb.batch_changes
 reverted_entry_ids = logdb.reverted_entry_ids
 
 
@@ -58,9 +59,15 @@ def write_intent(
     before: str,
     after: str,
     projected_delta: str,
+    batch_id: str | None = None,
+    detail: Any = None,
+    weight: int = 1,
 ) -> None:
     """Record what we are ABOUT to do. Must be called before the mutation."""
     logdb.insert_change(
+        batch_id=batch_id,
+        detail=detail,
+        weight=weight,
         entry_id=entry_id,
         tool=tool,
         customer_id=customer_id,
