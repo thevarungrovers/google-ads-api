@@ -53,6 +53,17 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
   person names from a real account, no real customer/campaign/budget ids, no
   credentials. Fixtures use placeholders (`Example Co`, `1234567890`,
   `example.com`). Nothing under `.claude/plans/` is ever committed.
+- **Every created name goes through `googleads_reporting/naming.py`.** A kind
+  that creates a named entity stamps it with `ctx.name_for_create`, lists what
+  it sends in `Proposal.created_names` and declares `creates_named`
+  (`tests/test_mcp_surface.py` fails one that does not). Renames go through
+  `ctx.name_for_rename`: the agent renames only its own entities.
+- **The naming identity comes only from `.env`** (`GOOGLE_ADS_MCP_OWNER_INITIALS`,
+  `GOOGLE_ADS_MCP_AGENT_NAME`; `config.env` too, `.env` winning) -- never a tool
+  argument or the process env -- so there is one identity per checkout. Empty
+  parts are skipped. **Real initials and agent names never appear in the repo**:
+  tests and docs use `AB` / `max` (and `CD` / `bot`), and `tests/conftest.py`
+  keeps the suite from reading the real `.env`.
 
 ## Adding a change kind
 

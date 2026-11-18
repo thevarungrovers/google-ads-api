@@ -41,6 +41,8 @@ it does.
   what `revert_change` takes.
 - **DO ask the human** for the EU political advertising declaration before
   `preview_create_campaign`. Never assume it.
+- **DO pass BASE names** when creating. The server adds the configured
+  `OWNER-agent-` prefix; read the final name in the preview's `naming` block.
 
 ## DON'T
 
@@ -52,6 +54,33 @@ it does.
 - **DON'T work around a cap or the kill switch.** Say what refused and stop.
 - **DON'T apply a recommendation without reading it** against `run_report`.
   Google is paid by the click.
+- **DON'T put a prefix on a name yourself**, and never another agent's
+  (`CD-bot-...`): it is refused. Don't try to rename an entity you did not
+  create -- that is refused too.
+
+## Naming
+
+Everything the server creates with a name is called `<OWNER>-<agent>-<base>`
+(e.g. `AB-max-spring_promo`; placeholders). The two parts come from the repo's
+`.env` only -- `get_guardrails` → `identity` shows which are set. Each part is
+optional: with only initials the name is `AB-<base>`, with only an agent name
+`max-<base>`, with neither the base exactly as given.
+
+- **Prefixed:** campaigns (and their budgets), ad groups -- alone or inside a
+  new campaign -- and labels. RSAs, keywords, negatives and assets have no
+  name field.
+- **Limits, prefix included:** campaign 248 bytes, ad group 254 characters,
+  label 80. Too long is a `name_length` FAIL that says how long the base may
+  be -- never truncated; shorten the base and preview again.
+- **Renames:** only your own campaigns and ad groups (your prefix, or the
+  ledger shows you created them). The prefix stays; a manual or other agent's
+  entity fails `own_entity`.
+- **Finding yours:** `find_campaigns(mine=True)`; also `origin`
+  (`agent` / `cli` / `manual`), `agent_name`, `owner` on `find_campaigns`,
+  `find_ad_groups` and `list_labels`. Rows carry `origin`, `owner`, `agent`,
+  `base`, `ledger_created`.
+- A malformed `.env` value fails `agent_identity` on every create and rename;
+  tell the human which key to fix.
 
 ## The caps
 
@@ -76,17 +105,17 @@ it does.
 | Tool | Gives you |
 |---|---|
 | `list_accounts` | Which accounts the credentials reach |
-| `find_campaigns`, `find_ad_groups` | Ids, status, budget / bid |
+| `find_campaigns`, `find_ad_groups` | Ids, status, budget / bid, who named each; filters `origin`, `agent_name`, `owner`, `mine` |
 | `get_campaign`, `get_ad_group` | One entity in full, with 7- and 30-day totals |
 | `run_report(report, days, ..., segment_by_date)` | `campaigns`, `ad_groups`, `keywords`, `search_terms`, `ads`, `locations`, `devices`, `hour_of_day`, `audiences`, `assets`, `conversions_by_action`, `accounts`. One row per entity unless `segment_by_date`; says `truncated` and `total_rows_available` |
 | `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists` | Keyword state and ids |
-| `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions` | Ids and text |
+| `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions` | Ids and text; `list_labels` takes the naming filters |
 | `find_locations`, `find_languages` | Geo and language ids for targeting |
 | `list_recommendations` | Google's suggestions, with impact |
 | `list_recent_changes` | Who changed what in Google Ads (UI included) |
-| `reconcile_ledger` | Which of this server's changes someone has since moved |
+| `reconcile_ledger` | Which of this server's changes someone has since moved; with a prefix configured, its `naming` section (`prefix_lost`, `prefix_without_ledger`) |
 | `run_gaql` | Read-only escape hatch; row-limited |
-| `get_guardrails`, `list_my_changes` | Bounds and budgets; what this server did |
+| `get_guardrails`, `list_my_changes` | Bounds, budgets and the naming `identity`; what this server did |
 
 ### Change — `preview_X` / `apply_X`
 
@@ -107,11 +136,11 @@ it does.
 | `create_responsive_search_ad` | PAUSED; 3 applies |
 | `replace_responsive_search_ad` | "Edit" an RSA: new ad (keeps the old ad's status) + pause old, one request; 3 applies |
 | `add_sitelinks`, `add_callouts`, `add_structured_snippets` | Asset + link, atomic; LIVE once linked (no paused state); 1 apply |
-| `create_campaign` | Whole Search/Display campaign, everything PAUSED; 3 applies |
-| `create_ad_group` | PAUSED; 3 applies |
-| `rename_campaign`, `rename_ad_group` | |
+| `create_campaign` | Whole Search/Display campaign, everything PAUSED; 3 applies. Base names; prefixed |
+| `create_ad_group` | PAUSED; 3 applies. Base name; prefixed |
+| `rename_campaign`, `rename_ad_group` | Your own entities only; the prefix is kept |
 | `recommendation` | A Google recommendation, through the matching typed change |
-| `low_risk_change` | Labels, URL suffix, tracking template, dismiss a recommendation |
+| `low_risk_change` | Labels (a created label is prefixed), URL suffix, tracking template, dismiss a recommendation |
 
 Plus `revert_change(entry_id)` — an `entry_id`, or a `batch_id` for a whole batch.
 
@@ -143,7 +172,8 @@ with cost and no conversions, not already excluded (`status`) →
 show the list and its total cost → apply → hand over the `batch_id`.
 
 **Launch a new campaign.** Ask for the EU political advertising declaration →
-`preview_create_campaign` (everything PAUSED) → apply → `preview_campaign_locations`,
+`preview_create_campaign` with BASE names, e.g. `name="spring_promo"`, ad group
+`"General"` (everything PAUSED; check the `naming` block) → apply → `preview_campaign_locations`,
 `preview_campaign_languages`, `preview_add_negative_keywords` → apply each →
 when the human says go: `preview_campaign_status(ENABLED)` (counts the full
 budget against today's total) → apply.

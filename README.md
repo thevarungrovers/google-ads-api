@@ -62,7 +62,8 @@ cd google-ads-api
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
-# 2. Fill in your credentials
+# 2. Fill in your credentials (and, optionally, the two naming keys --
+#    see "Naming what the agent creates")
 cp .env.example .env
 chmod 600 .env
 
@@ -87,6 +88,7 @@ before the venv exists.
 | OAuth client ID + secret | yes | Google Cloud Console |
 | Customer ID | yes | The 10-digit id of the account to work on |
 | Login customer ID | only sometimes | A manager account's id, if you reach the target *through* it |
+| Owner initials, agent name | optional | You choose them: `GOOGLE_ADS_MCP_OWNER_INITIALS` (2-4 capitals) and `GOOGLE_ADS_MCP_AGENT_NAME` (a lowercase slug) in `.env`. Leave both empty for plain names. See [Naming what the agent creates](#naming-what-the-agent-creates) |
 
 > **Do the whole Cloud Console part in ONE project, and write down which one.**
 > API access attaches to the project that issued your OAuth client. A client
@@ -200,7 +202,9 @@ other MCP servers. Running it twice does nothing the second time.
 # The same, then a typed confirmation before it applies
 ./.venv/bin/python scripts/manage.py campaign set-budget --name "brand - search" --amount 2.50
 
-# Build a whole campaign, interactively, in one atomic request
+# Build a whole campaign, interactively, in one atomic request.
+# With GOOGLE_ADS_MCP_OWNER_INITIALS=AB in .env, a campaign named
+# "spring_promo" here is created as "AB-cli-spring_promo"
 ./.venv/bin/python scripts/manage.py campaign new
 ```
 
@@ -223,14 +227,14 @@ describes each.
 
 | Tools | Give you |
 |---|---|
-| `list_accounts`, `find_campaigns`, `find_ad_groups` | Accounts, campaigns and ad groups **with their ids** |
+| `list_accounts`, `find_campaigns`, `find_ad_groups` | Accounts, campaigns and ad groups **with their ids**, who named each, and whether the server created it. Filter with `origin`, `agent_name`, `owner`, `mine` |
 | `get_campaign`, `get_ad_group` | One entity in full: status reasons, bidding, budget (shared? limited by it?), networks, locations, schedule, 7/30-day totals |
 | `run_report` | 12 reports -- campaigns, ad groups, keywords, search terms, ads, locations, devices, hour of day, audiences, assets, conversions by action, accounts. One row per entity by default; never truncates silently |
-| `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists`, `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions`, `find_locations`, `find_languages` | Current state, and the ids the write tools take |
+| `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists`, `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions`, `find_locations`, `find_languages` | Current state, and the ids the write tools take. `list_labels` takes the same naming filters as `find_campaigns` |
 | `list_recommendations`, `list_recent_changes` | Google's suggestions; who changed what in the UI |
-| `reconcile_ledger` | Which of the server's changes someone has since moved |
+| `reconcile_ledger` | Which of the server's changes someone has since moved, and (with a naming prefix configured) which of its entities lost the prefix or carry it without a ledger record |
 | `run_gaql` | Any read-only GAQL query, row-limited |
-| `get_guardrails`, `list_my_changes` | The limits and what is left of today's and this session's budget; what the server changed |
+| `get_guardrails`, `list_my_changes` | The limits and what is left of today's and this session's budget, and the naming identity in use; what the server changed |
 
 ### Can change (needs your yes)
 
@@ -243,7 +247,7 @@ Each is a `preview_*` / `apply_*` pair.
 | Keywords | Add keywords (created paused), negative keywords at campaign or ad group level, shared negative lists |
 | Targeting | Locations, languages, ad schedule, device and location bid modifiers, Search Partners / Display expansion, audience segments |
 | Ads | Create a responsive search ad (paused), "edit" one (new ad + pause the old, in one request), sitelinks, callouts, structured snippets |
-| Creation | A whole Search or Display campaign in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames |
+| Creation | A whole Search or Display campaign in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames of the agent's **own** campaigns and ad groups. Names get the configured prefix |
 | Recommendations | Act on one of Google's recommendations, held to the bounds of the change it amounts to |
 | Low-risk edits | Labels, final URL suffix, tracking template, dismissing a recommendation (one tool, closed allowlist) |
 | Undo | `revert_change` -- one entry, or a whole batch |
@@ -266,6 +270,100 @@ all. Video campaigns, which Google's API refuses to create.
 
 **There is no general-purpose "run any mutation" tool**, so anything without its
 own tool simply cannot be reached. A test pins the exact list.
+
+---
+
+## Naming what the agent creates
+
+A month after an agent created a campaign, nobody can tell it from one a person
+made by hand. So everything the server creates with a name starts with **who**
+made it:
+
+```
+<OWNER>-<agent>-<base>
+AB-max-spring_promo          <- placeholder values
+```
+
+The agent passes only the base (`spring_promo`); the server puts the prefix in
+front, and the preview shows the **exact** final name in its `naming` block
+before anyone approves it. The base keeps whatever separators it had --
+underscores, spaces, hyphens. The prefix always goes first, in front of any
+house naming style the base follows.
+
+### Setting it up
+
+Two keys in this repository's `.env` (`.env.example` lists them, empty):
+
+| Key | Format | Example |
+|---|---|---|
+| `GOOGLE_ADS_MCP_OWNER_INITIALS` | 2-4 uppercase letters | `AB` |
+| `GOOGLE_ADS_MCP_AGENT_NAME` | lowercase letters, digits or `_`, 2-24 characters, starting with a letter, no `-`; `cli` and `manual` are reserved | `max` |
+
+Each part is used only when it is set, so **leaving them empty is fine**:
+
+| Set in `.env` | A campaign asked for as `spring_promo` is named |
+|---|---|
+| both | `AB-max-spring_promo` |
+| initials only | `AB-spring_promo` |
+| agent name only | `max-spring_promo` |
+| neither | `spring_promo`, exactly as given |
+
+A value that is set but malformed (initials `a1`, an agent name with a `-`)
+refuses every create and rename at preview, naming the key to fix -- a bad
+prefix would make every later name ambiguous. The server prints the problem at
+startup too.
+
+The identity is read from `.env` (and from `config.env`, if you keep one; `.env`
+wins) and **nothing else**: a value in the MCP client's `env` block is ignored,
+with a warning at startup when it disagrees. So there is **one identity per
+checkout** -- a second agent needs its own checkout with its own `.env`.
+
+### What gets a prefix
+
+| Entity | Prefixed | Longest final name (prefix included) |
+|---|---|---|
+| Campaign | yes; its budget is named `<campaign name> budget` | 248 UTF-8 bytes |
+| Ad group (alone, or inside a new campaign) | yes | 254 characters |
+| Label | yes | 80 characters |
+| Responsive search ad | no -- RSAs have no name in the API | -- |
+| Keywords, negatives, sitelinks, callouts, snippets, targeting | no -- no name field | -- |
+
+A name over the limit is **refused, never truncated** -- the preview says how
+long the base may be. Passing a name that already carries your prefix does not
+double it; passing one with **another** identity's prefix (`CD-bot-...`) is
+refused.
+
+**The CLI** (`scripts/manage.py`) stamps what a person creates
+`<OWNER>-cli-<base>` when the initials are set, and leaves the name plain when
+they are not -- `cli` only tells a person from an agent under the same owner.
+It prints the identity it will use before you confirm.
+
+### Renames
+
+The agent may rename **only its own** campaigns and ad groups: ones whose name
+carries its prefix, or that its ledger shows it created. A campaign made by hand,
+or by another agent, is refused in the preview -- rename those in the Google Ads
+UI. The prefix is kept on a rename (only the base changes), and one that a person
+removed in the UI is put back. Undoing a rename restores the exact old name.
+
+### Finding things by who made them
+
+`find_campaigns`, `find_ad_groups` and `list_labels` take:
+
+| Argument | Keeps |
+|---|---|
+| `origin="agent"` / `"cli"` / `"manual"` | names with an agent prefix / a `-cli-` prefix / no prefix |
+| `agent_name="max"` | names with that agent part |
+| `owner="AB"` | names starting `AB-` |
+| `mine=True` | names with **this** server's prefix |
+
+Every row also carries `origin`, `owner`, `agent` and `base` parsed from the
+name, and `ledger_created`. The name is a convention anyone can type; the
+ledger is the proof. With a prefix configured, `reconcile_ledger` adds a
+`naming` section: `prefix_lost` (created here, but the live name has lost the
+prefix -- including ones created before names carried one), `prefix_without_ledger`
+(the name has the prefix, the ledger has no record), and a count of other
+identities' prefixes. It reports; it never renames anything.
 
 ---
 
