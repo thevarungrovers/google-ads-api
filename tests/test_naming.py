@@ -382,3 +382,49 @@ def test_a_rename_to_a_doubled_prefix_is_refused():
     with pytest.raises(NameRefused, match="prefix"):
         rename(BOTH, "AB-max-old", "AB-max-AB-max-new", entity_type="campaign",
                ledger_owned=False)
+
+
+# -- smaller rules ------------------------------------------------------------
+
+
+def test_a_shared_budget_name_is_held_to_255_bytes():
+    assert naming.NAME_LIMITS["budget"] == (255, "bytes")
+    assert stamp(NEITHER, "é" * 127, entity_type="budget").problems == []  # 254 bytes
+    over = stamp(NEITHER, "é" * 128, entity_type="budget")  # 256 bytes
+    assert [c for c, _ in over.problems] == ["name_length"]
+
+
+def test_the_cli_refuses_an_over_length_budget_name():
+    with pytest.raises(NameRefused, match="bytes"):
+        naming.stamp_for_cli(BOTH.cli(), "x" * 250, entity_type="budget")
+
+
+def test_the_length_message_uses_one_unit_throughout():
+    """Bytes where the limit is bytes: the prefix too is counted in bytes."""
+    (_, detail), = stamp(BOTH, "x" * 242, entity_type="campaign").problems
+    assert "character" not in detail
+    assert "249 bytes against 248" in detail and "at most 241 bytes" in detail
+    assert "7-byte prefix" in detail
+    (_, detail), = stamp(BOTH, "x" * 80, entity_type="label").problems
+    assert "bytes" not in detail and "7-character prefix" in detail
+
+
+def test_an_empty_env_value_does_not_override_config_env(tmp_path):
+    config = write(tmp_path / "config.env", **{OWNER_KEY: "AB", AGENT_KEY: "max"})
+    env = tmp_path / ".env"
+    env.write_text(f"{OWNER_KEY}=\n{AGENT_KEY}=   \n")
+    identity = load_identity((config, env))
+    assert identity.prefix == "AB-max-" and identity.source == "config.env"
+
+
+@pytest.mark.parametrize("bad", ["a​b", "a b", "a b", "a‎b", "a﻿b",
+                                 "a\x7fb", "a\x1bb", "a\u0085b"])
+def test_invisible_and_format_characters_are_refused(bad):
+    with pytest.raises(NameRefused, match="invisible"):
+        stamp(BOTH, bad, entity_type="campaign")
+    with pytest.raises(NameRefused, match="invisible"):
+        stamp(NEITHER, bad, entity_type="label")
+
+
+def test_visible_unicode_is_kept():
+    assert stamp(BOTH, "été café ü", entity_type="campaign").final == "AB-max-été café ü"

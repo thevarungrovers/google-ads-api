@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,14 +68,29 @@ IDENTITY_FILES: tuple[Path, ...] = (PROJECT_ROOT / "config.env", PROJECT_ROOT / 
 #:    255 bytes, so 255 - len(" budget").
 #:  * ad_group: "fewer than 255 UTF-8 full-width characters".
 #:  * label: "between 1 and 80, inclusive".
+#:  * budget (a shared one, created at the CLI): "between 1 and 255 ... UTF-8
+#:    bytes".
 NAME_LIMITS: dict[str, tuple[int, str]] = {
     "campaign": (248, "bytes"),
     "ad_group": (254, "characters"),
     "label": (80, "characters"),
+    "budget": (255, "bytes"),
 }
 
-#: Google forbids NUL, LF and CR in names; TAB is refused for the same reason.
-_CONTROL = re.compile(r"[\x00\t\n\r]")
+#: Google forbids NUL, LF and CR in names. Every other control character, and
+#: every invisible format or separator character, is refused too: a name with
+#: a zero-width space (U+200B) or a line separator (U+2028) looks identical to
+#: one without, so two "identical" names could differ, and a filter or a
+#: rename by name would miss one.
+_INVISIBLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _invisible(text: str) -> str | None:
+    """The first control/format/separator character in ``text``, as U+XXXX."""
+    for char in text:
+        if unicodedata.category(char) in _INVISIBLE:
+            return f"U+{ord(char):04X}"
+    return None
 
 #: The full form, ``OWNER-agent-base``. Only this form can be told apart from
 #: a base that merely contains a hyphen.
@@ -319,8 +335,8 @@ def final_name_problems(name: str, entity_type: str) -> list[str]:
     """Why a FINAL name, as it will be sent, breaks Google's rules: control
     characters, or over the entity type's length limit. Empty when it is fine."""
     out = []
-    if _CONTROL.search(name):
-        out.append("contains a control character (NUL, TAB, CR or LF)")
+    if (char := _invisible(name)) is not None:
+        out.append(f"contains an invisible or control character ({char})")
     limit = NAME_LIMITS.get(entity_type)
     if limit is not None and length_of(name, entity_type) > limit[0]:
         out.append(f"{length_of(name, entity_type)} {limit[1]} against {limit[0]}")
@@ -431,8 +447,11 @@ def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
         base, rule = requested, "no_identity"
     if not base.strip():
         raise NameRefused("The name has nothing after the prefix.")
-    if _CONTROL.search(base):
-        raise NameRefused("The name contains a control character (NUL, TAB, CR or LF).")
+    if (char := _invisible(base)) is not None:
+        raise NameRefused(
+            f"The name contains an invisible or control character ({char}); names may "
+            "hold only visible characters and plain spaces."
+        )
     forged = foreign(identity, prefix + base) if prefix else None
     if forged is not None:
         # Initials only: "AB-" + "bot-x" reads as agent bot's name.
@@ -450,13 +469,15 @@ def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
         out.problems.append(("agent_identity", problem))
     limit = out.max_length
     if limit is not None and out.length > limit:
-        room = limit - length_of(prefix, entity_type)
+        unit = NAME_LIMITS[entity_type][1]
+        prefix_len = length_of(prefix, entity_type)
+        room = limit - prefix_len
+        # One unit throughout: bytes where the limit is bytes, prefix included.
         out.problems.append((
             "name_length",
-            f"{out.length} {NAME_LIMITS[entity_type][1]} against {limit}: the base may be "
-            f"at most {room} {NAME_LIMITS[entity_type][1]} after the {len(prefix)}-character "
-            f"prefix; it is {length_of(base, entity_type)}. Shorten it; names are never "
-            "truncated.",
+            f"{out.length} {unit} against {limit}: the base may be at most {room} {unit} "
+            f"after the {prefix_len}-{unit.rstrip('s')} prefix; it is "
+            f"{length_of(base, entity_type)} {unit}. Shorten it; names are never truncated.",
         ))
     return out
 
