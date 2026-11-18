@@ -120,3 +120,20 @@ def test_the_wizard_stamps_and_echoes_both_names(monkeypatch, identity, prefix):
         assert any(f"{prefix} prefix is added" in a for a in asked)
     else:
         assert not any("will be named" in line for line in printed)
+
+
+@pytest.mark.parametrize("identity, prefix", IDENTITIES)
+def test_the_cli_refuses_another_identity_whatever_is_configured(manage, monkeypatch,
+                                                                 identity, prefix):
+    """The CLI and the MCP server agree: no identity is no licence to forge one."""
+    module, _ = manage
+    args = args_for(module, ["campaign", "create", "--name", "CD-bot-x",
+                             "--budget-resource-name", "b"], identity)
+    with pytest.raises(MutationError, match="CD-bot-"):
+        module.build_plan(None, args)
+    row = SimpleNamespace(campaign=SimpleNamespace(id=11, name="Hand made"))
+    monkeypatch.setattr(module.campaigns, "find", lambda *_a, **_k: row)
+    args = args_for(module, ["campaign", "rename", "--campaign-id", "11",
+                             "--new-name", "CD-bot-y"], identity)
+    with pytest.raises(MutationError, match="CD-bot-"):
+        module.build_plan(None, args)

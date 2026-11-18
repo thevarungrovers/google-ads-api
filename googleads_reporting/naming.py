@@ -368,23 +368,28 @@ def _base_of(identity: Identity, requested: str) -> tuple[str, bool]:
         raise NameRefused("The name has nothing after the prefix.")
     if owns(identity, requested):
         return requested[len(identity.prefix):], True
-    parsed = parse(requested)
+    parsed = foreign(identity, requested)
     if parsed is not None:
-        raise NameRefused(
-            f"name starts with {parsed.owner}-{parsed.agent}-, which is "
-            f"{_whose(parsed)} prefix; "
-            "pass the base name only. (A base that merely looks like one -- two to "
-            "four capitals, a hyphen, a lowercase word, a hyphen -- must be "
-            "reordered.)"
-        )
+        _refuse_foreign(parsed)
     return requested, False
+
+
+def _refuse_foreign(parsed: Parsed) -> None:
+    """Impersonation: a requested name in another identity's full form."""
+    raise NameRefused(
+        f"name starts with {parsed.owner}-{parsed.agent}-, which is "
+        f"{_whose(parsed)} prefix, not this checkout's; pass the base name only. "
+        "(A base that merely looks like one -- two to four capitals, a hyphen, a "
+        "lowercase word, a hyphen -- must be reordered.)"
+    )
 
 
 def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
     """The final name for a NEW entity of ``entity_type``.
 
     In order: trim and refuse empty; our own prefix is never doubled; another
-    identity's prefix is refused; control characters are refused; over-length
+    identity's full prefix is refused, even with no identity configured
+    (impersonation); control characters are refused; over-length
     is a problem (never truncated; the prefix is never shortened).
     """
     requested = (requested or "").strip()
@@ -395,6 +400,11 @@ def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
         base, already = _base_of(identity, requested)
         rule = "already_ours" if already else "stamped"
     else:
+        # No identity is not a licence to write somebody else's: "CD-bot-x"
+        # would attribute the entity to agent bot of owner CD.
+        parsed = foreign(identity, requested)
+        if parsed is not None:
+            _refuse_foreign(parsed)
         base, rule = requested, "no_identity"
     if not base.strip():
         raise NameRefused("The name has nothing after the prefix.")

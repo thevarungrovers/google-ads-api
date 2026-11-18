@@ -154,8 +154,8 @@ def test_another_identitys_prefix_is_refused(identity):
 
 
 def test_with_no_identity_the_name_is_used_exactly_as_given():
-    stamped = stamp(NEITHER, "  CD-bot-launch ", entity_type="campaign")
-    assert stamped.final == "CD-bot-launch" and stamped.prefix == ""
+    stamped = stamp(NEITHER, "  spring-launch ", entity_type="campaign")
+    assert stamped.final == "spring-launch" and stamped.prefix == ""
     assert stamped.rule.startswith("no identity configured")
     assert stamped.problems == []
 
@@ -335,3 +335,25 @@ def test_cli_rename_under_initials_only_does_not_claim_another_agents_campaign()
     cli = OWNER_ONLY.cli()
     assert owns(cli, "AB-cli-x")
     assert not owns(cli, "AB-bot-x") and not owns(cli, "AB-x")
+
+
+# -- impersonation: refused even with no identity configured -----------------
+
+
+@pytest.mark.parametrize("identity", [BOTH, OWNER_ONLY, AGENT_ONLY, NEITHER])
+@pytest.mark.parametrize("name", ["CD-bot-x", "AB-cli-x", " CD-bot-x "])
+def test_a_name_carrying_another_identity_is_refused_whatever_is_configured(identity, name):
+    """No identity is not a licence to write somebody else's: "CD-bot-x" would
+    attribute the entity to agent bot of owner CD."""
+    with pytest.raises(NameRefused, match="prefix"):
+        stamp(identity, name, entity_type="campaign")
+
+
+def test_renaming_to_another_identity_is_refused_with_no_identity():
+    with pytest.raises(NameRefused, match="CD-bot-"):
+        rename(NEITHER, "old", "CD-bot-y", entity_type="campaign", ledger_owned=True)
+
+
+def test_the_cli_with_no_initials_refuses_another_identity_too():
+    with pytest.raises(NameRefused, match="CD-bot-"):
+        naming.stamp_for_cli(NEITHER.cli(), "CD-bot-x", entity_type="campaign")

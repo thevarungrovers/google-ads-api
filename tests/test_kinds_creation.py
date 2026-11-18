@@ -291,3 +291,19 @@ def test_a_manual_ad_group_in_our_campaign_is_not_ours():
     ledger_created_campaign(groups=["General"])
     kind = engine.add(RenameAdGroup())
     assert failed(engine.preview(kind, {"ad_group_id": "22", "new_name": "x"}), "own_entity")
+
+
+def test_with_no_identity_a_create_cannot_forge_another_identity():
+    engine, client, _ = named_rig("", "")
+    kind = engine.add(CreateCampaign())
+    with pytest.raises(ValueError, match="CD-bot-"):
+        engine.preview(kind, args(name="CD-bot-spring"))
+
+
+def test_with_no_identity_a_rename_cannot_forge_another_identity():
+    engine, client, _ = named_rig("", "")
+    campaign_named(client, "old")
+    ledger_created_campaign()
+    kind = engine.add(RenameCampaign())
+    with pytest.raises(ValueError, match="CD-bot-"):
+        engine.preview(kind, {"campaign_id": "11", "new_name": "CD-bot-spring"})
