@@ -324,6 +324,7 @@ class Engine:
             projected=pending.projected_delta,
             weight=kind.weight,
             resource_names_for=lambda names: kind.resource_names_for(payload, names),
+            record_created=bool(kind.creates_named),
         )
         ctx.counters.record(pending.projected_delta, weight=kind.weight)
 
@@ -358,8 +359,13 @@ class Engine:
         weight: int,
         resource_names_for: Callable[[list[str]], list[str | None]],
         reverts: list[str] | None = None,
+        record_created: bool = False,
     ):
         """Ledger intents, the mutation, ledger outcomes. Raises on failure.
+
+        ``record_created``: a creating kind's single row also records EVERY
+        resource the request created -- a campaign's nested ad groups get no
+        row of their own, and "did we create it?" must be answered by id.
 
         One ledger row per item. A batch's rows share a batch_id and each
         carries the WHOLE batch's projected delta and weight: the daily cap
@@ -402,6 +408,8 @@ class Engine:
                 ok=True,
                 resource_name=per_item[index] if index < len(per_item) else None,
                 reverts=reverts[index] if reverts else None,
+                created_resources=(names if record_created and len(entry_ids) == 1
+                                   and len(names) > 1 else None),
             )
         return result, entry_ids, batch_id
 

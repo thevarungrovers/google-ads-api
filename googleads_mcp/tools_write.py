@@ -183,11 +183,11 @@ def register(mcp, state) -> Engine:
     return engine
 
 
-#: GAQL for each named entity type: (resource, id field, name field, parent id field).
+#: GAQL for each named entity type: (resource, id field, name field).
 _NAMED = {
-    "campaign": ("campaign", "campaign.id", "campaign.name", None),
-    "ad_group": ("ad_group", "ad_group.id", "ad_group.name", "campaign.id"),
-    "label": ("label", "label.id", "label.name", None),
+    "campaign": ("campaign", "campaign.id", "campaign.name"),
+    "ad_group": ("ad_group", "ad_group.id", "ad_group.name"),
+    "label": ("label", "label.id", "label.name"),
 }
 
 
@@ -217,17 +217,14 @@ def naming_reconcile(state) -> dict[str, Any]:
     index = ledger.created_index()
     lost, unrecorded, others = [], [], {}
     try:
-        for entity_type, (resource, id_field, name_field, parent) in _NAMED.items():
-            select = (id_field, name_field) + ((parent,) if parent else ())
+        for entity_type, (resource, id_field, name_field) in _NAMED.items():
             rows = state.read_client.rows(Query(
-                select=select, from_resource=resource,
+                select=(id_field, name_field), from_resource=resource,
                 where=(f"{resource}.status != 'REMOVED'",),
             ))
             for r in rows:
                 entity_id, name = str(r[id_field]), r[name_field] or ""
-                parent_id = str(r[parent]) if parent else None
-                by_ledger = ledger.created_by_us(entity_type, entity_id, campaign_id=parent_id,
-                                                 name=name, index=index)
+                by_ledger = ledger.created_by_us(entity_type, entity_id, index=index)
                 by_name = naming.owns(identity, name)
                 line = {"entity_type": entity_type, "entity_id": entity_id, "name": name}
                 if by_ledger and not by_name:

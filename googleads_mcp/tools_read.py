@@ -266,8 +266,7 @@ def register(mcp, state) -> None:
                 "campaign_name": r["campaign.name"],
                 "currency": r["customer.currency_code"],
                 **naming_fields(state, r["ad_group.name"], ledger.created_by_us(
-                    "ad_group", str(r["ad_group.id"]), campaign_id=str(r["campaign.id"]),
-                    name=r["ad_group.name"], index=index)),
+                    "ad_group", str(r["ad_group.id"]), index=index)),
             }
             for r in rows if keep(r["ad_group.name"])
         ][:limit]

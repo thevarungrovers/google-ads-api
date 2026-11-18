@@ -435,8 +435,7 @@ def register(mcp, state) -> None:
             "ad_group_id": str(g["ad_group.id"]),
             "name": g["ad_group.name"],
             "naming": naming_fields(state, g["ad_group.name"], ledger.created_by_us(
-                "ad_group", str(g["ad_group.id"]), campaign_id=str(g["campaign.id"]),
-                name=g["ad_group.name"])),
+                "ad_group", str(g["ad_group.id"]))),
             "status": g["ad_group.status"],
             "type": g["ad_group.type"],
             "campaign": {"campaign_id": str(g["campaign.id"]), "name": g["campaign.name"],

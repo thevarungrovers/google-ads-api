@@ -67,7 +67,7 @@ class WriteContext:
         return naming.stamp(self.identity, requested, entity_type=entity_type)
 
     def name_for_rename(self, entity_type: str, current: str, requested: str, *,
-                        entity_id: str, campaign_id: str | None = None):
+                        entity_id: str):
         """The final name for renaming an existing entity: a naming.Stamped.
 
         Only OUR entities may be renamed -- the live name carries our prefix,
@@ -78,7 +78,7 @@ class WriteContext:
         from googleads_reporting import naming
 
         owned = naming.owns(self.identity, current) or ledger.created_by_us(
-            entity_type, entity_id, campaign_id=campaign_id, name=current)
+            entity_type, entity_id)
         return naming.rename(self.identity, current, requested, entity_type=entity_type,
                              ledger_owned=owned)
 

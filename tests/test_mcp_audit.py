@@ -94,7 +94,8 @@ def test_recent_changes_stay_inside_googles_30_day_window(monkeypatch):
 # -- reconcile_ledger: the naming section ------------------------------------
 
 
-def _created(entry_id, entity_type, resource, *, identity=True, names=()):
+def _created(entry_id, entity_type, resource, *, identity=True, names=(), also=()):
+    """``also``: the other resources the request created (nested ad groups)."""
     from googleads_mcp import ledger
 
     detail = {"created_names": [list(n) for n in names]}
@@ -105,7 +106,8 @@ def _created(entry_id, entity_type, resource, *, identity=True, names=()):
         entity_id="new", entity_name="x", field_name="created", before="(none)",
         after="PAUSED", projected_delta="0", detail=detail,
     )
-    ledger.write_outcome(entry_id=entry_id, ok=True, resource_name=resource)
+    ledger.write_outcome(entry_id=entry_id, ok=True, resource_name=resource,
+                         created_resources=[resource, *also] if also else None)
 
 
 def _names_state(identity, campaigns=(), ad_groups=(), labels=()):
@@ -128,7 +130,8 @@ def test_reconcile_reports_lost_and_unrecorded_prefixes():
     _created("c1", "campaign", "customers/1112223333/campaigns/1")
     _created("c2", "campaign", "customers/1112223333/campaigns/2", identity=False)
     _created("c3", "campaign", "customers/1112223333/campaigns/3",
-             names=[("ad_group", "AB-max-General")])
+             names=[("ad_group", "AB-max-General")],
+             also=["customers/1112223333/adGroups/30"])
     state = _names_state(
         Identity.from_values("AB", "max", source=".env"),
         campaigns=[(1, "renamed in the UI"), (2, "old style"), (3, "AB-max-launch"),

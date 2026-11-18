@@ -365,8 +365,7 @@ class RenameAdGroup(ChangeKind):
         is kept (or put back); only the base changes."""
         row = adgroups.find(ctx.client, ad_group_id=ad_group_id)
         stamped = ctx.name_for_rename("ad_group", row.ad_group.name, new_name,
-                                      entity_id=str(row.ad_group.id),
-                                      campaign_id=str(row.campaign.id))
+                                      entity_id=str(row.ad_group.id))
         new_name = stamped.final
         taken = CreateAdGroup._named(ctx, str(row.campaign.id), new_name)
         return Proposal(

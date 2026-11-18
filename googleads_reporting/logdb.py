@@ -605,13 +605,28 @@ def complete_change(
     resource_name: str | None = None,
     error: str | None = None,
     reverts: str | None = None,
+    created_resources: list[str] | None = None,
 ) -> None:
-    """Record how it went. A plain UPDATE, never an upsert -- see the docstring."""
-    connect().execute(
+    """Record how it went. A plain UPDATE, never an upsert -- see the docstring.
+
+    ``created_resources`` -- every resource the request created, when it made
+    more than the row's own (a campaign's nested ad groups) -- is merged into
+    the row's detail, so a later "did we create this?" can match by id.
+    """
+    conn = connect()
+    conn.execute(
         "UPDATE changes SET ok=?, outcome_at=?, resource_name=?, error=?, reverts=? "
         "WHERE entry_id=?",
         (1 if ok else 0, _now(), resource_name, error, reverts, entry_id),
     )
+    if created_resources:
+        found = conn.execute(
+            "SELECT detail_json FROM changes WHERE entry_id=?", (entry_id,)
+        ).fetchone()
+        detail = (_loads(found[0]) if found else None) or {}
+        detail["created_resources"] = list(created_resources)
+        conn.execute("UPDATE changes SET detail_json=? WHERE entry_id=?",
+                     (json.dumps(detail, default=str), entry_id))
 
 
 def _row_to_entry(row: sqlite3.Row) -> dict[str, Any]:

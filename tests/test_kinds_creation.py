@@ -202,7 +202,9 @@ def campaign_named(client, name, campaign_id=11):
     })])
 
 
-def ledger_created_campaign(campaign_id=11, groups=()):
+def ledger_created_campaign(campaign_id=11, groups=(), group_ids=()):
+    """A create_campaign row as the engine writes it: the names it showed, and
+    every resource the request created (the ad groups by id)."""
     from googleads_mcp import ledger
 
     ledger.write_intent(
@@ -211,8 +213,10 @@ def ledger_created_campaign(campaign_id=11, groups=()):
         before="(none)", after="PAUSED", projected_delta="0",
         detail={"created_names": [["ad_group", g] for g in groups]},
     )
-    ledger.write_outcome(entry_id=f"made{campaign_id}", ok=True,
-                         resource_name=f"customers/1112223333/campaigns/{campaign_id}")
+    made = [f"customers/1112223333/campaigns/{campaign_id}",
+            *(f"customers/1112223333/adGroups/{g}" for g in group_ids)]
+    ledger.write_outcome(entry_id=f"made{campaign_id}", ok=True, resource_name=made[0],
+                         created_resources=made)
 
 
 @pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
@@ -275,7 +279,7 @@ def test_an_ad_group_built_inside_our_campaign_is_ours(owner, agent, prefix):
         "ad_group.id": 22, "ad_group.name": f"{prefix}General", "campaign.id": 11,
         "campaign.name": "x", "ad_group.resource_name": "customers/1112223333/adGroups/22",
     })])
-    ledger_created_campaign(groups=[f"{prefix}General"])
+    ledger_created_campaign(groups=[f"{prefix}General"], group_ids=[22])
     kind = engine.add(RenameAdGroup())
     preview = engine.preview(kind, {"ad_group_id": "22", "new_name": "Generic"})
     assert not preview.blocked, preview.checks
@@ -307,3 +311,31 @@ def test_with_no_identity_a_rename_cannot_forge_another_identity():
     kind = engine.add(RenameCampaign())
     with pytest.raises(ValueError, match="CD-bot-"):
         engine.preview(kind, {"campaign_id": "11", "new_name": "CD-bot-spring"})
+
+
+def test_a_later_manual_ad_group_with_a_nested_name_is_not_ours():
+    """With no prefix configured, our campaign was created with an ad group
+    named "General". A person later adds ANOTHER ad group named "General" to
+    it (the first was removed or renamed). Only the id proves which one we
+    made; the name alone must not make theirs ours."""
+    engine, client, _ = named_rig("", "")
+    client.answer("ad_group.id = 23", [row(**{
+        "ad_group.id": 23, "ad_group.name": "General", "campaign.id": 11,
+        "campaign.name": "x", "ad_group.resource_name": "customers/1112223333/adGroups/23",
+    })])
+    ledger_created_campaign(groups=["General"], group_ids=[22])
+    kind = engine.add(RenameAdGroup())
+    assert failed(engine.preview(kind, {"ad_group_id": "23", "new_name": "x"}), "own_entity")
+
+
+def test_creating_a_campaign_records_every_entity_it_created_by_id():
+    from googleads_mcp import ledger
+
+    engine, client, _ = named_rig("", "")
+    kind = engine.add(CreateCampaign())
+    _, result = preview_and_apply(engine, kind, **args(
+        name="spring", ad_groups=[{"name": "General", "ads": [AD]}]))
+    index = ledger.created_index()
+    made = ledger.find_entry(result.entry_id)["detail"]["created_resources"]
+    group_ids = {n.rsplit("/", 1)[1] for n in made if "/adGroups/" in n}
+    assert len(group_ids) == 1 and group_ids <= index["ad_group"]
