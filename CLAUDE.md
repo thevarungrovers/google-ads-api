@@ -72,7 +72,10 @@ ledger, `validate_only` in every preview.
    - `current(ctx, payload)` -- today's value, spelled exactly like `before`.
    - `build(ctx, payload)` -- the `PlannedChange`.
    - `current_for_entry` / `inverse` (and `revert_projection` if undoing it
-     restores spend) for `revert_change`.
+     restores spend) for `revert_change`. A change that can only NARROW
+     delivery projects 0 but its undo widens: set `Proposal.narrows` (or the
+     kind's `narrows` if it always narrows) and the revert projects the
+     campaigns' unused budget.
 3. Add it to `changes/__init__.all_kinds()`, pin both tool names in
    `tests/test_mcp_surface.py` and `install.py`, and mention it in
    `server.INSTRUCTIONS` and the skill.

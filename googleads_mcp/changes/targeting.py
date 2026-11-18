@@ -124,7 +124,8 @@ class _AddCampaignCriteria(CreatesRemovable):
 
     def _propose(self, ctx, campaign_id: str, specs: list[dict[str, Any]], *,
                  checks: list[Check] | None = None, note: str | None = None,
-                 warnings: list[str] | None = None, widens: bool = True) -> Proposal:
+                 warnings: list[str] | None = None, widens: bool = True,
+                 narrows: bool = False) -> Proposal:
         if not specs:
             raise ValueError("Nothing to add.")
         row = _campaign(ctx, campaign_id)
@@ -153,6 +154,7 @@ class _AddCampaignCriteria(CreatesRemovable):
             checks=checks, projected=projected, campaign_id=str(row.campaign.id),
             campaign_status=row.campaign.status.name, items=items, batch=True,
             warnings=warnings or [], note=" ".join(p for p in (note, bound) if p),
+            narrows=narrows,
             payload={"campaign_id": str(campaign_id), "specs": specs},
         )
 
@@ -204,7 +206,8 @@ class CampaignLocations(_AddCampaignCriteria):
                 "adding one restricts it to the listed locations"
             )
         return self._propose(ctx, campaign_id, specs, warnings=warnings,
-                             widens=bool(add) and bool(current_targets))
+                             widens=bool(add) and bool(current_targets),
+                             narrows=bool(exclude) or (bool(add) and not current_targets))
 
     def _key(self, spec):
         return f"{'-' if spec['negative'] else '+'}{spec['geo_target_id']}"
@@ -241,7 +244,8 @@ class CampaignLanguages(_AddCampaignCriteria):
         warnings = [] if has_any else [
             "the campaign targets ALL languages today; adding one restricts it to the listed ones"
         ]
-        return self._propose(ctx, campaign_id, specs, warnings=warnings, widens=has_any)
+        return self._propose(ctx, campaign_id, specs, warnings=warnings, widens=has_any,
+                             narrows=not has_any)
 
     def _key(self, spec):
         return spec["language_id"]
@@ -300,7 +304,7 @@ class AdSchedule(_AddCampaignCriteria):
             "adding windows restricts it to them"
         ]
         return self._propose(ctx, campaign_id, specs, checks=checks, warnings=warnings,
-                             widens=raises)
+                             widens=raises, narrows=not has_any)
 
     def _key(self, spec):
         return f"{spec['day']}:{spec['start_hour']}-{spec['end_hour']}"
@@ -357,6 +361,7 @@ class DeviceBidModifier(ChangeKind):
             field_name="device_bid_modifier", before=before, after=render_pct(pct),
             checks=modifier_change_checks(ctx, before_pct, pct), projected=projected,
             campaign_id=str(row.campaign.id), note=note, warnings=warnings,
+            narrows=multiplier(pct) < multiplier(before_pct),
             items=[LedgerItem("campaign", f"{campaign_id}~{device}",
                               f"{row.campaign.name} on {device}", "device_bid_modifier",
                               before, render_pct(pct),
@@ -442,7 +447,7 @@ class LocationBidModifier(ChangeKind):
             field_name="bid_modifier",
             before=render_pct(before_pct),
             after=render_pct(pct), checks=modifier_change_checks(ctx, before_pct, pct),
-            projected=projected,
+            projected=projected, narrows=multiplier(pct) < multiplier(before_pct),
             campaign_id=str(campaign_id), note=note, warnings=warnings,
             payload={"campaign_id": str(campaign_id), "criterion_id": str(criterion_id),
                      "pct": str(pct)},
@@ -526,6 +531,8 @@ class CampaignNetworks(ChangeKind):
                           "differs from today" if after_state != state else "identical to today")],
             projected=projected, campaign_id=str(campaign_id),
             campaign_status=found.campaign.status.name, note=note,
+            # Any network turned OFF is one its revert turns back on.
+            narrows=any(state[k] and not after_state[k] for k in state),
             items=[LedgerItem("campaign", str(campaign_id), found.campaign.name, "networks",
                               before, _render_networks(after_state),
                               {"before": state, "after": after_state})],
@@ -621,6 +628,7 @@ class AudienceTargeting(CreatesRemovable):
             path=f"{row.campaign.name} > {row.ad_group.name}", field_name="created",
             before=NOTHING, after=f"{len(ids)} user list(s), {mode}", checks=checks,
             projected=Decimal("0"), campaign_id=str(row.campaign.id), items=items, batch=True,
+            narrows=current_mode == "targeting",
             note=("Observation adds reporting only; targeting can only narrow who sees the "
                   "ads. Neither raises spend on its own, so the projected delta is 0."),
             payload={"ad_group_id": str(ad_group_id), "user_list_ids": ids},

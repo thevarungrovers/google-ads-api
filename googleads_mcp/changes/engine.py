@@ -35,7 +35,13 @@ from typing import Annotated, Any, Callable
 from pydantic import Field
 
 from googleads_mcp import ledger
-from googleads_mcp.changes.base import PREVIEW_SAFE, ChangeKind, LedgerItem, Proposal
+from googleads_mcp.changes.base import (
+    PREVIEW_SAFE,
+    ChangeKind,
+    LedgerItem,
+    Proposal,
+    narrowed_campaigns,
+)
 from googleads_mcp.guardrails import (
     Check,
     any_failed,
@@ -104,6 +110,14 @@ class Engine:
         ctx = self.ctx
         proposal: Proposal = kind.propose(ctx, **args)
         items = proposal.ledger_items()
+        if proposal.narrows or kind.narrows:
+            # Recorded on the row, because undoing a narrowing WIDENS delivery
+            # and the revert has to know which campaigns' budgets it reopens.
+            narrowed = proposal.narrowed_campaigns
+            if narrowed is None:
+                narrowed = [] if proposal.campaign_id is None else [str(proposal.campaign_id)]
+            for item in items:
+                item.detail = {**(item.detail or {}), "narrowing": list(narrowed)}
 
         checks: list[Check] = [
             check_writes_enabled(),
@@ -325,9 +339,10 @@ class Engine:
             kind.inverse(ctx, entry)  # raises, with the kind's own reason
         self._not_stale(kind, entry)
         # Then the SPEND half, now that we know what undoing this restores:
-        # reverting a pause or a cut puts spend back, and that counts against
-        # the session and daily totals like any enable (exempt, like one, from
-        # the per-change limit).
+        # reverting a pause, a cut or any other narrowing change (a network
+        # off, a negative, a first location target...) puts spend back, and
+        # that counts against the session and daily totals like any enable
+        # (exempt, like one, from the per-change limit).
         projected, _ = kind.revert_projection(ctx, entry)
         self._refuse_if_over_caps(projected, 1)
         plan = kind.inverse(ctx, entry)
@@ -362,13 +377,25 @@ class Engine:
             )
         plans = []
         projected = Decimal("0")
+        # A narrowing batch carries the same campaign on every row; reopening
+        # it once is the bound, so those are counted per campaign, not per row.
+        reopened: set[str] = set()
         for entry in live:
             kind = self.kind_for_entry(entry)
             if not kind.revertible:
                 kind.inverse(ctx, entry)
             self._not_stale(kind, entry)
-            projected += kind.revert_projection(ctx, entry)[0]
+            narrowed = narrowed_campaigns(entry)
+            if narrowed is not None and type(kind).revert_projection is ChangeKind.revert_projection:
+                reopened.update(narrowed)
+            else:
+                projected += kind.revert_projection(ctx, entry)[0]
             plans.append(kind.inverse(ctx, entry))
+        if reopened:
+            from googleads_mcp.changes.common import campaign_headroom
+
+            projected += sum((campaign_headroom(ctx, c)[0] for c in sorted(reopened)),
+                             Decimal("0"))
         self._refuse_if_over_caps(projected, 1)
         plan = merge_plans(plans)
 
@@ -413,6 +440,11 @@ class Engine:
 
     @staticmethod
     def _inverse_item(entry: dict[str, Any]) -> LedgerItem:
+        # The undo of a narrowing WIDENS, so its own row must not claim to
+        # narrow: undoing the undo re-narrows, which is free.
+        detail = entry.get("detail")
+        if isinstance(detail, dict) and "narrowing" in detail:
+            detail = {k: v for k, v in detail.items() if k != "narrowing"} or None
         return LedgerItem(
             entity_type=entry["entity_type"],
             entity_id=str(entry["entity_id"]),
@@ -420,7 +452,7 @@ class Engine:
             field_name=entry["field"],
             before=entry["after"],
             after=entry["before"],
-            detail=entry.get("detail"),
+            detail=detail,
         )
 
     def _revert_result(self, entry: dict[str, Any], new_entry: str) -> ApplyResult:

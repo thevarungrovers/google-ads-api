@@ -147,7 +147,7 @@ class BiddingStrategy(ChangeKind):
             field_name="bidding_strategy", before=before.render(currency),
             after=after.render(currency), checks=checks, projected=projected,
             campaign_id=str(row.campaign.id), campaign_status=row.campaign.status.name,
-            warnings=warnings, note=note,
+            warnings=warnings, note=note, narrows=bool(restricts),
             items=[LedgerItem("campaign", str(row.campaign.id), row.campaign.name,
                               "bidding_strategy", before.render(currency),
                               after.render(currency),

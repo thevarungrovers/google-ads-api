@@ -189,6 +189,16 @@ class Proposal:
     #: against the DAILY total (and the session total) instead. Bid and budget
     #: increases are not enables and must pass both.
     is_enable: bool = False
+    #: This change can only NARROW delivery (a network off, a tighter target,
+    #: a modifier cut, a first location/language/schedule target, a negative,
+    #: an audience in targeting mode), so it projects 0 -- but undoing it
+    #: widens delivery again. The engine records it on every ledger row as
+    #: ``detail["narrowing"]`` (the campaigns it narrowed) so the revert
+    #: projects their unused budget instead of the inverse of 0.
+    narrows: bool = False
+    #: The campaigns a narrowing change narrows. None means [campaign_id];
+    #: a shared negative list sets every campaign attached to it.
+    narrowed_campaigns: list[str] | None = None
 
     def ledger_items(self) -> list[LedgerItem]:
         if self.items:
@@ -203,6 +213,12 @@ class Proposal:
                 after=self.after,
             )
         ]
+
+
+def narrowed_campaigns(entry: dict[str, Any]) -> list[str] | None:
+    """The campaigns a ledger row's change narrowed, or None if it did not narrow."""
+    narrowed = (entry.get("detail") or {}).get("narrowing")
+    return None if narrowed is None else [str(c) for c in narrowed]
 
 
 class ChangeKind:
@@ -234,6 +250,9 @@ class ChangeKind:
     #: our own bounds pass. Off only where the mutation cannot be built until
     #: the apply (none so far).
     validate_in_preview: bool = True
+    #: Every change of this kind narrows delivery (negatives). For a kind that
+    #: narrows only sometimes, set Proposal.narrows instead.
+    narrows: bool = False
 
     def validates(self, payload: dict[str, Any]) -> bool:
         """Whether THIS change can be checked with validate_only.
@@ -278,9 +297,20 @@ class ChangeKind:
         A revert is not free: reverting a budget CUT puts spend back. The
         default is the inverse of what the original change projected -- a cut
         of 10 reverts as +10 -- counted like an enable, since it restores a
-        state the account already had. Kinds whose original projected 0 but
-        whose revert resumes delivery (undoing a pause) override this.
+        state the account already had.
+
+        A NARROWING change projected 0, so its inverse would be 0 too, yet
+        undoing it widens delivery again. Its rows carry the campaigns it
+        narrowed, and reverting one projects their unused daily budget.
+        Kinds whose revert resumes delivery some other way (undoing a pause)
+        override this.
         """
+        narrowed = narrowed_campaigns(entry)
+        if narrowed is not None:
+            from googleads_mcp.changes.common import campaign_headroom
+
+            restored = sum((campaign_headroom(ctx, c)[0] for c in narrowed), Decimal("0"))
+            return restored, restored > 0
         try:
             original = Decimal(str(entry.get("projected_daily_spend_delta") or "0"))
         except (InvalidOperation, ValueError):

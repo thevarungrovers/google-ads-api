@@ -364,6 +364,7 @@ class AddNegativeKeywords(CreatesRemovable):
     apply_title = "Apply adding negative keywords (TAKES EFFECT IMMEDIATELY)"
     ledger_keys = (("negative keyword", "created"),)
     status_field = None
+    narrows = True
 
     def propose(
         self,
@@ -471,6 +472,7 @@ class AddToSharedNegativeList(CreatesRemovable):
     ledger_keys = (("shared negative keyword", "created"),)
     resource = "shared_criterion"
     status_field = None
+    narrows = True
 
     def propose(
         self,
@@ -506,6 +508,7 @@ class AddToSharedNegativeList(CreatesRemovable):
             path=f"shared list {found.shared_set.name} -> {names}", field_name="created",
             before=NOTHING, after=f"{len(texts)} x -[{match_type}]", checks=checks,
             projected=Decimal("0"), items=items, batch=True,
+            narrowed_campaigns=[cid for cid, _ in attached],
             warnings=[f"applies to every attached campaign: {names}"] if attached else [],
             note=NEGATIVE_NOTE,
             payload={"shared_set_id": str(shared_set_id), "texts": texts, "match_type": match_type},
@@ -533,6 +536,7 @@ class LinkSharedNegativeList(CreatesRemovable):
     ledger_keys = (("campaign shared set", "created"),)
     resource = "campaign_shared_set"
     status_field = "status"
+    narrows = True
 
     def propose(
         self,
