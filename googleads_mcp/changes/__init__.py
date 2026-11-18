@@ -15,12 +15,27 @@ def all_kinds() -> list[ChangeKind]:
     """Every published kind, in the order the tools are registered."""
     from googleads_mcp.changes.adgroups import AdGroupCpcBid, AdGroupStatus
     from googleads_mcp.changes.campaigns import CampaignDailyBudget, CampaignStatus
+    from googleads_mcp.changes.keywords import (
+        AddKeywords,
+        AddNegativeKeywords,
+        AddToSharedNegativeList,
+        KeywordCpcBid,
+        KeywordStatus,
+        LinkSharedNegativeList,
+    )
 
     return [
         CampaignStatus(),
         CampaignDailyBudget(),
         AdGroupStatus(),
         AdGroupCpcBid(),
+        # keywords and search terms
+        AddKeywords(),
+        KeywordStatus(),
+        KeywordCpcBid(),
+        AddNegativeKeywords(),
+        AddToSharedNegativeList(),
+        LinkSharedNegativeList(),
     ]
 
 

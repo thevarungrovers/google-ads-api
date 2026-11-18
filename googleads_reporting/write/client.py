@@ -31,6 +31,13 @@ ALLOWED_MUTATE_SERVICES = frozenset(
         "AdGroupAdService",
         "AdGroupCriterionService",
         "AssetService",
+        # Keywords and negatives (agent-parity, subgroup A). Campaign-level
+        # negatives and targeting criteria, shared negative keyword lists and
+        # attaching one to a campaign. SharedSetService itself is NOT here:
+        # nothing creates or edits a list's own settings.
+        "CampaignCriterionService",
+        "SharedCriterionService",
+        "CampaignSharedSetService",
         # Reads are allowed here too: a mutation needs to fetch current state to
         # show a before/after diff. GoogleAdsService also carries the ATOMIC
         # multi-entity mutate used to build a whole campaign in one request --
@@ -352,6 +359,9 @@ _REQUEST_TYPES = {
     "mutate_ad_groups": "MutateAdGroupsRequest",
     "mutate_ad_group_ads": "MutateAdGroupAdsRequest",
     "mutate_ad_group_criteria": "MutateAdGroupCriteriaRequest",
+    "mutate_campaign_criteria": "MutateCampaignCriteriaRequest",
+    "mutate_shared_criteria": "MutateSharedCriteriaRequest",
+    "mutate_campaign_shared_sets": "MutateCampaignSharedSetsRequest",
 }
 
 

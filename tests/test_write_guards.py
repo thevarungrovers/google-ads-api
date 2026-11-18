@@ -247,3 +247,18 @@ def test_the_cli_money_flags_document_their_units():
     ):
         with pytest.raises(SystemExit):
             module.build_parser().parse_args(args)
+
+
+def test_the_mutate_allowlist_is_exactly_what_was_chosen():
+    """Widening it is the deliberate act that enlarges the blast radius.
+
+    Pinned as a whole set so an addition shows up in review as an edit here,
+    with the reason next to it in client.py.
+    """
+    assert ALLOWED_MUTATE_SERVICES == {
+        "CampaignBudgetService", "CampaignService", "AdGroupService",
+        "AdGroupAdService", "AdGroupCriterionService", "AssetService",
+        "GoogleAdsService",
+        # keywords and negatives
+        "CampaignCriterionService", "SharedCriterionService", "CampaignSharedSetService",
+    }

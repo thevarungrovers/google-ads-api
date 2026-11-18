@@ -43,6 +43,13 @@ PREVIEW_TOOLS = frozenset({
     "preview_campaign_daily_budget",
     "preview_ad_group_status",
     "preview_ad_group_cpc_bid",
+    # keywords and search terms
+    "preview_add_keywords",
+    "preview_keyword_status",
+    "preview_keyword_cpc_bid",
+    "preview_add_negative_keywords",
+    "preview_add_to_shared_negative_list",
+    "preview_link_shared_negative_list",
 })
 
 APPLY_TOOLS = frozenset({
@@ -50,6 +57,13 @@ APPLY_TOOLS = frozenset({
     "apply_campaign_daily_budget",
     "apply_ad_group_status",
     "apply_ad_group_cpc_bid",
+    # keywords and search terms
+    "apply_add_keywords",
+    "apply_keyword_status",
+    "apply_keyword_cpc_bid",
+    "apply_add_negative_keywords",
+    "apply_add_to_shared_negative_list",
+    "apply_link_shared_negative_list",
     "revert_change",
 })
 

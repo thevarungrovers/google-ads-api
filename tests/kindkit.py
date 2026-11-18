@@ -94,12 +94,38 @@ class FakeWriteClient(MutatingGoogleAdsClient):
                 return list(rows)
         return []
 
-    def _result(self, operations, apply: bool) -> MutationResult:
+    #: Service -> the resource collection its results are named in.
+    COLLECTIONS = {
+        "CampaignService": "campaigns", "AdGroupService": "adGroups",
+        "AdGroupAdService": "adGroupAds", "AdGroupCriterionService": "adGroupCriteria",
+        "CampaignCriterionService": "campaignCriteria", "SharedCriterionService": "sharedCriteria",
+        "CampaignSharedSetService": "campaignSharedSets", "CampaignBudgetService": "campaignBudgets",
+        "AssetService": "assets", "CampaignAssetService": "campaignAssets",
+        "AdGroupAssetService": "adGroupAssets", "LabelService": "labels",
+        "CampaignLabelService": "campaignLabels", "AdGroupLabelService": "adGroupLabels",
+        "AdGroupAdLabelService": "adGroupAdLabels",
+        "AdGroupCriterionLabelService": "adGroupCriterionLabels",
+        "BiddingStrategyService": "biddingStrategies",
+    }
+
+    def _name(self, service: str) -> str:
+        self._next_id += 1
+        collection = self.COLLECTIONS.get(service, "unknown")
+        return f"customers/{CUSTOMER}/{collection}/1~{self._next_id}"
+
+    @staticmethod
+    def _service_of(operation) -> str:
+        """The service a MutateOperation's populated oneof belongs to."""
+        for descriptor, _ in type(operation).pb(operation).ListFields():
+            words = descriptor.name.removesuffix("_operation").split("_")
+            return "".join(w.capitalize() for w in words) + "Service"
+        return "unknown"
+
+    def _result(self, operations, apply: bool, service: str | None = None) -> MutationResult:
         names = []
         if apply:
-            for _ in operations:
-                self._next_id += 1
-                names.append(f"customers/{CUSTOMER}/thing/{self._next_id}")
+            for operation in operations:
+                names.append(self._name(service or self._service_of(operation)))
         return MutationResult(validated_only=not apply, resource_names=names)
 
     def mutate(self, *, service_name, method, operations, customer_id=None,
@@ -112,7 +138,7 @@ class FakeWriteClient(MutatingGoogleAdsClient):
             raise MutationError(self.refuse)
         self.sent.append({"apply": apply, "service": service_name, "method": method,
                           "operations": list(operations)})
-        return self._result(operations, apply)
+        return self._result(operations, apply, service_name)
 
     def mutate_atomic(self, operations, *, customer_id=None, apply=False, describe=None):
         from googleads_reporting.write.client import MutationError
