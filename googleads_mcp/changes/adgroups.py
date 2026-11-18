@@ -18,8 +18,26 @@ from googleads_mcp.changes.base import (
 from googleads_mcp.changes.campaigns import wanted_status
 from googleads_mcp.guardrails import check_ceiling, check_currency, check_pct_increase
 from googleads_mcp.previews import project_bid_change, project_pause
+from googleads_mcp.guardrails import Check
+from googleads_reporting.query import Query
 from googleads_reporting.write import adgroups, campaigns
 
+#: Bidding strategies under which Google actually uses an ad group's max CPC.
+#: Under every other one (Maximize Clicks, Maximize Conversions, Target CPA,
+#: Target ROAS, ...) the bid is stored and ignored, so changing it changes
+#: nothing -- worth knowing before a human approves it.
+CPC_BID_STRATEGIES = frozenset({"MANUAL_CPC", "ENHANCED_CPC"})
+
+
+def bidding_strategy_type(ctx, campaign_id: str) -> str:
+    rows = ctx.client.query(
+        Query(
+            select=("campaign.id", "campaign.bidding_strategy_type"),
+            from_resource="campaign",
+            where=(f"campaign.id = {int(campaign_id)}",),
+        ).to_gaql()
+    )
+    return rows[0].campaign.bidding_strategy_type.name if rows else "UNKNOWN"
 
 
 class AdGroupStatus(ChangeKind):
@@ -123,9 +141,26 @@ class AdGroupCpcBid(ChangeKind):
         currency = ctx.currency_of()
         metrics = ctx.metrics_7d(f"ad_group.id = {int(ad_group_id)}")
         projected = project_bid_change(before, after, int(metrics["clicks"]))
+        strategy = bidding_strategy_type(ctx, str(row.campaign.id))
+        effective = strategy in CPC_BID_STRATEGIES
         limits = ctx.limits
         warnings = []
+        if not effective:
+            warnings.append(
+                f"the campaign bids with {strategy}, which IGNORES ad group max "
+                "CPC bids. Applying this changes the stored value and nothing "
+                "else; change the bidding strategy if the goal is to move spend."
+            )
+            projected = Decimal("0")
         checks = [
+            # Informational, never blocking: setting a bid ahead of a switch
+            # back to manual CPC is legitimate. The warning carries the point.
+            Check(
+                "bid_is_effective",
+                True,
+                f"yes, {strategy} uses ad group bids" if effective
+                else f"NO -- {strategy} ignores this bid (informational)",
+            ),
             check_currency(limits, currency),
             check_ceiling("max_cpc_bid", after, limits.max_cpc_bid, currency),
             check_pct_increase(

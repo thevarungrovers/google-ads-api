@@ -64,11 +64,24 @@ def test_pausing_projects_zero_and_round_trips_through_revert():
     assert client.applied[-1]["operations"][0].update.status.name == "ENABLED"
 
 
+def test_a_bid_under_automated_bidding_warns_that_it_is_ignored():
+    engine, client, _ = rig()
+    account(client, strategy="MAXIMIZE_CONVERSIONS")
+    kind = engine.add(AdGroupCpcBid())
+    preview = engine.preview(kind, {"ad_group_id": "22", "new_cpc_bid": "1.20"})
+
+    assert preview.blocked is False, "informational, not blocking"
+    assert any("IGNORES ad group max CPC" in w for w in preview.warnings)
+    assert any("bid_is_effective" in c and "NO" in c for c in preview.checks)
+    assert Decimal(preview.projected_daily_spend_delta) == 0
+
+
 def test_a_bid_under_manual_cpc_is_effective_and_sent_in_micros():
     engine, client, _ = rig()
     account(client)
     kind = engine.add(AdGroupCpcBid())
     preview, _ = preview_and_apply(engine, kind, ad_group_id="22", new_cpc_bid="1.20")
+    assert any("bid_is_effective" in c and "yes" in c for c in preview.checks)
     assert preview.before == "1.00 CAD" and preview.after == "1.20 CAD"
     assert client.applied[-1]["operations"][0].update.cpc_bid_micros == 1_200_000
 
