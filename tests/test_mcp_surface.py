@@ -18,6 +18,19 @@ READ_TOOLS = frozenset({
     "run_report",
     "get_guardrails",
     "list_my_changes",
+    # state of the account, for deciding what to change
+    "get_campaign",
+    "get_ad_group",
+    "list_keywords",
+    "list_negative_keywords",
+    "list_shared_negative_lists",
+    "list_ads",
+    "list_assets",
+    "list_labels",
+    "list_audiences",
+    "list_conversion_actions",
+    "find_locations",
+    "find_languages",
 })
 
 PREVIEW_TOOLS = frozenset({
