@@ -151,3 +151,16 @@ def test_reconcile_skips_names_when_no_prefix_is_configured():
     report = naming_reconcile(state)
     assert report["checked"] is False and "no naming identity" in report["reason"]
     assert state.read_client.queries == []
+
+
+def test_reconcile_under_initials_only_does_not_file_other_identities_as_ours():
+    from googleads_mcp.tools_write import naming_reconcile
+    from googleads_reporting.naming import Identity
+
+    state = _names_state(
+        Identity.from_values("AB", "", source=".env"),
+        campaigns=[(1, "AB-launch"), (2, "AB-bot-x"), (3, "AB-cli-y")],
+    )
+    report = naming_reconcile(state)
+    assert [r["entity_id"] for r in report["prefix_without_ledger"]] == ["1"]
+    assert report["other_identities"] == {"AB-bot-": 1, "AB-cli-": 1}

@@ -240,19 +240,35 @@ def parse(name: str | None) -> Parsed | None:
     return Parsed(*found.groups())
 
 
+def foreign(identity: Identity, name: str | None) -> Parsed | None:
+    """The full ``OWNER-agent-`` form ``name`` parses as, when that is NOT
+    exactly this identity's owner and agent; None otherwise.
+
+    An initials-only install is (AB, ""), so "AB-bot-x" -- another agent's --
+    and "AB-cli-x" -- a human's -- are both foreign to it, though they start
+    with its "AB-" prefix.
+    """
+    parsed = parse(name)
+    if parsed is None or (parsed.owner, parsed.agent) == (identity.owner, identity.agent):
+        return None
+    return parsed
+
+
 def owns(identity: Identity, name: str | None) -> bool:
-    """Whether ``name`` carries THIS install's prefix (a convention, not proof)."""
+    """Whether ``name`` carries THIS install's prefix (a convention, not proof).
+
+    It starts with our prefix, has something after it, and does not parse as
+    any OTHER full identity: "AB-" does not claim "AB-bot-x" or "AB-cli-x".
+    """
     prefix = identity.prefix
     name = name or ""
     if not prefix or not name.startswith(prefix) or len(name) == len(prefix):
         return False
-    parsed = parse(name)
-    if parsed is not None and identity.owner and identity.agent:
-        return (parsed.owner, parsed.agent) == (identity.owner, identity.agent)
-    if parsed is not None and parsed.agent == CLI_AGENT and identity.agent != CLI_AGENT:
-        # "AB-cli-x" is a human's, even to an install configured with AB only.
-        return False
-    return True
+    return foreign(identity, name) is None
+
+
+def _whose(parsed: Parsed) -> str:
+    return "a CLI's" if parsed.agent == CLI_AGENT else "another agent's"
 
 
 def attribute(name: str | None, identity: Identity | None = None) -> dict[str, Any]:
@@ -356,7 +372,7 @@ def _base_of(identity: Identity, requested: str) -> tuple[str, bool]:
     if parsed is not None:
         raise NameRefused(
             f"name starts with {parsed.owner}-{parsed.agent}-, which is "
-            f"{'a CLI' if parsed.agent == CLI_AGENT else 'another agent'}'s prefix; "
+            f"{_whose(parsed)} prefix; "
             "pass the base name only. (A base that merely looks like one -- two to "
             "four capitals, a hyphen, a lowercase word, a hyphen -- must be "
             "reordered.)"
@@ -384,6 +400,15 @@ def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
         raise NameRefused("The name has nothing after the prefix.")
     if _CONTROL.search(base):
         raise NameRefused("The name contains a control character (NUL, TAB, CR or LF).")
+    forged = foreign(identity, prefix + base) if prefix else None
+    if forged is not None:
+        # Initials only: "AB-" + "bot-x" reads as agent bot's name.
+        raise NameRefused(
+            f"the name would be {prefix + base!r}, which reads as "
+            f"{forged.owner}-{forged.agent}-, {_whose(forged)} prefix. A base must not "
+            "start with a lowercase agent-like word and a hyphen here; reorder it or "
+            "use '_' instead of that '-'."
+        )
     out = Stamped(requested=requested, final=prefix + base, base=base, prefix=prefix,
                   rule=rule, entity_type=entity_type)
     if rule == "no_identity":
@@ -414,6 +439,9 @@ def rename(identity: Identity, current: str, requested: str, *, entity_type: str
     and only the base can change.
     """
     has_prefix = owns(identity, current)
+    # A live name that parses as a DIFFERENT full identity is that identity's
+    # now, whatever the ledger says: renaming it would strip their marker.
+    ledger_owned = ledger_owned and foreign(identity, current) is None
     out = stamp(identity, requested, entity_type=entity_type)
     if has_prefix:
         out.rule = "kept_prefix" if out.rule != _RULE_TEXT else out.rule
@@ -421,8 +449,8 @@ def rename(identity: Identity, current: str, requested: str, *, entity_type: str
         out.rule = "restored_prefix"
     if not (has_prefix or ledger_owned):
         parsed = parse(current)
-        whose = (f"{'a CLI' if parsed.agent == CLI_AGENT else 'another agent'}'s entity "
-                 f"({parsed.owner}-{parsed.agent}-)" if parsed is not None
+        whose = (f"{_whose(parsed)} entity ({parsed.owner}-{parsed.agent}-)"
+                 if parsed is not None
                  else "a manual entity: it has no prefix of ours and the ledger shows "
                       "no creation of it by this server")
         out.problems.append((

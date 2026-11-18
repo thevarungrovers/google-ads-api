@@ -265,3 +265,73 @@ def test_a_malformed_filter_is_refused():
         naming.check_filter("ab'", None)
     with pytest.raises(ValueError):
         naming.check_filter(None, "x' OR 1=1")
+
+
+# -- whose name is it: a full form that parses to another identity ---------
+#
+# owns(name) = it starts with our prefix AND (it does not parse as a full
+# OWNER-agent- form, OR it parses to exactly our owner and agent). Without the
+# second half, an initials-only install's "AB-" claims "AB-bot-x" (another
+# agent's) and "AB-cli-x" (a human's).
+
+
+@pytest.mark.parametrize("identity, name, ours", [
+    (OWNER_ONLY, "AB-x", True),
+    (OWNER_ONLY, "AB-bot-x", False),
+    (OWNER_ONLY, "AB-cli-x", False),
+    (OWNER_ONLY, "AB-max-x", False),
+    (AGENT_ONLY, "max-x", True),
+    (AGENT_ONLY, "max-AB-x", True),
+    (AGENT_ONLY, "AB-max-x", False),
+    (BOTH, "AB-max-x", True),
+    (BOTH, "AB-bot-x", False),
+    (BOTH, "AB-cli-x", False),
+    (BOTH, "AB-x", False),
+])
+def test_owns_refuses_a_name_that_parses_as_another_identity(identity, name, ours):
+    assert owns(identity, name) is ours
+
+
+def test_initials_only_attribute_and_mine_file_other_identities_correctly():
+    assert attribute("AB-bot-x", OWNER_ONLY) == {
+        "origin": "agent", "owner": "AB", "agent": "bot", "base": "x"}
+    assert attribute("AB-cli-x", OWNER_ONLY)["origin"] == "cli"
+    assert attribute("AB-x", OWNER_ONLY) == {
+        "origin": "agent", "owner": "AB", "agent": None, "base": "x"}
+    rows = ["AB-x", "AB-bot-x", "AB-cli-x", "x"]
+    assert [r for r in rows if matches(r, mine=True, identity=OWNER_ONLY)] == ["AB-x"]
+
+
+@pytest.mark.parametrize("current", ["AB-bot-x", "AB-cli-x"])
+def test_initials_only_cannot_rename_another_identitys_entity(current):
+    renamed = rename(OWNER_ONLY, current, "y", entity_type="campaign", ledger_owned=False)
+    assert [c for c, _ in renamed.problems] == ["own_entity"]
+
+
+@pytest.mark.parametrize("identity", [BOTH, OWNER_ONLY, AGENT_ONLY, NEITHER])
+def test_ledger_evidence_does_not_override_another_full_identity(identity):
+    """Even if the ledger says we created it, a live name that parses as a
+    DIFFERENT full identity is somebody else's now; renaming it would strip
+    their marker."""
+    renamed = rename(identity, "CD-bot-launch", "spring", entity_type="campaign",
+                     ledger_owned=True)
+    assert "own_entity" in [c for c, _ in renamed.problems]
+
+
+@pytest.mark.parametrize("base", ["bot-x", "cli-x", "max-x", "spring-sale"])
+def test_initials_only_refuses_a_base_that_would_forge_an_agent(base):
+    """AB- + "bot-x" is "AB-bot-x": it would read as another agent's."""
+    with pytest.raises(NameRefused, match="agent"):
+        stamp(OWNER_ONLY, base, entity_type="campaign")
+
+
+@pytest.mark.parametrize("base", ["bot_x", "Spring-sale", "x-bot", "2go-x", "a-x"])
+def test_initials_only_still_stamps_bases_that_cannot_parse(base):
+    assert stamp(OWNER_ONLY, base, entity_type="campaign").final == "AB-" + base
+
+
+def test_cli_rename_under_initials_only_does_not_claim_another_agents_campaign():
+    """The CLI identity (AB, cli) owns AB-cli-x and nothing else under AB."""
+    cli = OWNER_ONLY.cli()
+    assert owns(cli, "AB-cli-x")
+    assert not owns(cli, "AB-bot-x") and not owns(cli, "AB-x")

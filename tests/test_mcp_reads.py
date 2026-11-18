@@ -122,7 +122,9 @@ def test_mine_narrows_in_gaql_before_the_exact_local_match(monkeypatch):
 
 @pytest.mark.parametrize("owner, agent, expected", [
     ("AB", "max", ["AB-max-spring"]),
-    ("AB", "", ["AB-max-spring", "AB-bot-other"]),
+    # initials only: "AB-" does not claim AB-max-/AB-bot-/AB-cli-, which are
+    # other identities' full forms, and none here is a plain "AB-<base>"
+    ("AB", "", []),
     ("", "bot", []),  # agent only: its names start "bot-", and none here do
 ])
 def test_mine_follows_whichever_parts_are_configured(monkeypatch, owner, agent, expected):
