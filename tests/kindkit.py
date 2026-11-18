@@ -185,3 +185,85 @@ def preview_and_apply(engine, kind, **args):
 
 def failed(preview, name: str) -> bool:
     return any(line.startswith("FAIL") and f" {name}:" in line for line in preview.checks)
+
+
+# ---------------------------------------------------------------------------
+# The read side: the real ReadOnlyGoogleAdsClient over a fake transport
+# ---------------------------------------------------------------------------
+
+
+class _Stream:
+    def __init__(self, responder):
+        self.responder = responder
+
+    def search_stream(self, *, customer_id, query):
+        rows = self.responder(query)
+        yield SimpleNamespace(results=rows)
+
+    def search(self, *, customer_id, query):  # pragma: no cover - unused
+        return iter(self.responder(query))
+
+    def list_accessible_customers(self):
+        return SimpleNamespace(resource_names=[f"customers/{CUSTOMER}"])
+
+
+class _RawRead:
+    def __init__(self, responder):
+        self.stream = _Stream(responder)
+
+    def get_service(self, _name, **_kw):
+        return self.stream
+
+
+class ReadAccount:
+    """GAQL substring -> GoogleAdsRows, for the real read client."""
+
+    def __init__(self) -> None:
+        self.answers: list[tuple[str, list[Any]]] = []
+        self.queries: list[str] = []
+
+    def answer(self, needle: str, rows: list[Any]) -> None:
+        self.answers.insert(0, (needle, rows))
+
+    def __call__(self, gaql: str) -> list[Any]:
+        self.queries.append(gaql)
+        for needle, rows in self.answers:
+            if needle in gaql:
+                return list(rows)
+        return []
+
+
+def read_client(account: ReadAccount):
+    from googleads_reporting.client import ReadOnlyGoogleAdsClient
+
+    return ReadOnlyGoogleAdsClient(_RawRead(account), SETTINGS)
+
+
+class Registrar:
+    """Collects tool functions by name, as the MCP server would register them."""
+
+    def __init__(self) -> None:
+        self.tools: dict[str, Any] = {}
+
+    def tool(self, **_kw):
+        def decorate(fn):
+            self.tools[fn.__name__] = fn
+            return fn
+
+        return decorate
+
+
+def read_tools(module, monkeypatch, account: ReadAccount, **limit_overrides):
+    """Register ``module``'s read tools against ``account``; return the tools."""
+    from googleads_reporting.client import ReadOnlyGoogleAdsClient
+
+    client = read_client(account)
+    monkeypatch.setattr(ReadOnlyGoogleAdsClient, "from_env", classmethod(lambda cls: client))
+    lim = limits(**limit_overrides)
+    state = SimpleNamespace(
+        limits=lim, counters=SessionCounters(lim), previews=PreviewStore(),
+        read_client=client, default_customer_id=CUSTOMER, write_client=None,
+    )
+    registrar = Registrar()
+    module.register(registrar, state)
+    return registrar.tools

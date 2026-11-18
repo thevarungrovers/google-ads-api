@@ -209,7 +209,13 @@ def get_field(row: Any, path: str) -> Any:
     """
     current: Any = row
     for part in path.split("."):
-        current = getattr(current, part, _MISSING)
+        parent = current
+        current = getattr(parent, part, _MISSING)
+        if current is _MISSING:
+            # proto-plus renames a field that collides with a Python builtin
+            # or keyword by appending "_": GAQL's `asset.type` is `type_` on
+            # the message. GAQL keeps the bare name, so accept both here.
+            current = getattr(parent, part + "_", _MISSING)
         if current is _MISSING:
             raise FieldPathError(
                 f"{path!r} is not a field on this row (stopped at {part!r})."

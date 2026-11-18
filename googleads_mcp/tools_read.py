@@ -14,6 +14,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from googleads_mcp.errors import refusals_reach_the_caller
+from googleads_mcp.readkit import fetch
 from googleads_reporting.client import ReadOnlyGoogleAdsClient
 from googleads_reporting.export import summarise, to_dataframe
 from googleads_reporting.query import (
@@ -194,13 +195,28 @@ def register(mcp, state) -> None:
         start_date: Annotated[str | None, Field(description="YYYY-MM-DD")] = None,
         end_date: Annotated[str | None, Field(description="YYYY-MM-DD")] = None,
         campaign_id: Annotated[str | None, Field(description="Restrict to one campaign")] = None,
+        ad_group_id: Annotated[
+            str | None, Field(description="Restrict to one ad group (reports that have one)")
+        ] = None,
+        segment_by_date: Annotated[
+            bool,
+            Field(description="One row per entity PER DAY. Default: one row per "
+                  "entity over the whole window"),
+        ] = False,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> dict[str, Any]:
-        """Campaign, keyword or account performance.
+        """Performance for one report: campaigns, ad groups, keywords, search
+        terms, ads, locations, devices, hours, audiences, assets, conversions.
 
-        Today is excluded from `days` on purpose: today's metrics are partial
-        all day and drag every average down. Cost is already converted out of
-        micros, so `metrics.cost` is in the account's currency.
+        One row per entity over the window by default; segment_by_date=True
+        for daily rows. Today is excluded from `days` on purpose: today's
+        metrics are partial all day and drag every average down. Cost is
+        already converted out of micros, so `metrics.cost` is in the account's
+        currency.
+
+        Never silently cut: `truncated` says whether more rows matched than
+        `limit` returned, `total_rows_available` how many, and `totals` are
+        over ALL matching rows, not just the ones returned.
         """
         definition = get_report(report)
         condition = None
@@ -209,17 +225,28 @@ def register(mcp, state) -> None:
                 condition = between(start_date, end_date)
             elif days:
                 condition = last_n_days(days)
-        extra = (f"campaign.id = {int(campaign_id)}",) if campaign_id else ()
+        extra = []
+        if campaign_id:
+            extra.append(f"campaign.id = {int(campaign_id)}")
+        if ad_group_id:
+            if not any(p.startswith("ad_group.") for p in definition.select):
+                raise ValueError(f"Report {report!r} has no ad group to filter on.")
+            extra.append(f"ad_group.id = {int(ad_group_id)}")
         query = definition.build(
-            date_condition=condition, extra_where=extra, limit=limit
+            date_condition=condition,
+            extra_where=tuple(extra),
+            segment_by_date=segment_by_date,
         )
-        rows = client.rows(query)
-        frame = to_dataframe(rows, definition.select)
+        fetched = fetch(client, query, limit)
+        frame = to_dataframe(fetched["rows"], query.select)
+        everything = to_dataframe(fetched["all_rows"], query.select)
         return {
             "report": report,
-            "gaql": query.to_gaql(),
+            "gaql": fetched["gaql"],
             "row_count": len(frame),
-            "totals": {k: str(v) for k, v in summarise(frame).items()},
+            "total_rows_available": fetched["total_rows_available"],
+            "truncated": fetched["truncated"],
+            "totals": {k: str(v) for k, v in summarise(everything).items()},
             "rows": frame.to_dict(orient="records"),
         }
 
