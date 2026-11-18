@@ -103,6 +103,10 @@ SAFE_TOOLS = (
     "preview_add_sitelinks",
     "preview_add_callouts",
     "preview_add_structured_snippets",
+    "preview_create_campaign",
+    "preview_create_ad_group",
+    "preview_rename_campaign",
+    "preview_rename_ad_group",
 )
 
 #: The tools that move real money. Never allowlisted, by any answer to anything.
@@ -133,6 +137,10 @@ WRITE_TOOLS = (
     "apply_add_sitelinks",
     "apply_add_callouts",
     "apply_add_structured_snippets",
+    "apply_create_campaign",
+    "apply_create_ad_group",
+    "apply_rename_campaign",
+    "apply_rename_ad_group",
 )
 
 READ_ONLY_ENV = "GOOGLE_ADS_MCP_READ_ONLY"

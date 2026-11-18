@@ -68,6 +68,11 @@ PREVIEW_TOOLS = frozenset({
     "preview_add_sitelinks",
     "preview_add_callouts",
     "preview_add_structured_snippets",
+    # creation and naming
+    "preview_create_campaign",
+    "preview_create_ad_group",
+    "preview_rename_campaign",
+    "preview_rename_ad_group",
 })
 
 APPLY_TOOLS = frozenset({
@@ -100,6 +105,11 @@ APPLY_TOOLS = frozenset({
     "apply_add_sitelinks",
     "apply_add_callouts",
     "apply_add_structured_snippets",
+    # creation and naming
+    "apply_create_campaign",
+    "apply_create_ad_group",
+    "apply_rename_campaign",
+    "apply_rename_ad_group",
     "revert_change",
 })
 
@@ -200,9 +210,24 @@ def test_applies_are_not_marked_read_only(tools):
         assert tools[name].annotations.read_only_hint is False, name
 
 
+#: Applies that cannot move money or stop delivery, and so are NOT marked
+#: destructive -- crying wolf on a rename trains people to click through the
+#: loud prompts. Pinned by name: anything not listed here must be destructive.
+NON_DESTRUCTIVE_APPLIES = frozenset({
+    "revert_change",
+    "apply_rename_campaign",
+    "apply_rename_ad_group",
+})
+
+
 def test_money_moving_applies_are_marked_destructive(tools):
-    for name in APPLY_TOOLS - {"revert_change"}:
+    for name in APPLY_TOOLS - NON_DESTRUCTIVE_APPLIES:
         assert tools[name].annotations.destructive_hint is True, name
+
+
+def test_the_non_destructive_applies_really_are(tools):
+    for name in NON_DESTRUCTIVE_APPLIES:
+        assert tools[name].annotations.destructive_hint is False, name
 
 
 def test_revert_is_not_marked_destructive(tools):
@@ -341,6 +366,10 @@ def test_no_tool_can_remove_an_entity(tools):
 CREATION_TOOLS = frozenset({
     "preview_create_responsive_search_ad",
     "apply_create_responsive_search_ad",
+    "preview_create_campaign",
+    "apply_create_campaign",
+    "preview_create_ad_group",
+    "apply_create_ad_group",
 })
 
 

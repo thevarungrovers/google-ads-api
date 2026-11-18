@@ -221,6 +221,9 @@ class Engine:
         ctx.counters.record(pending.projected_delta, weight=kind.weight)
 
         resources = list(result.resource_names)
+        # The resource the kind says is ITS result -- for a whole campaign
+        # build that is the campaign, not the budget created first.
+        own = [n for n in kind.resource_names_for(payload, resources) if n]
         return ApplyResult(
             applied=True,
             entry_id=entry_ids[0],
@@ -230,7 +233,7 @@ class Engine:
             field_name=entity["field_name"],
             before=payload["before"],
             after=payload["after"],
-            resource_name=resources[0] if resources else None,
+            resource_name=own[0] if own else (resources[0] if resources else None),
             session=ctx.counters.snapshot(),
             batch_id=batch_id,
             entry_ids=entry_ids if batch_id else [],

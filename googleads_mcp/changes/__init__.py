@@ -24,6 +24,12 @@ def all_kinds() -> list[ChangeKind]:
     )
     from googleads_mcp.changes.bidding import BiddingStrategy, SharedBudgetAmount
     from googleads_mcp.changes.campaigns import CampaignDailyBudget, CampaignStatus
+    from googleads_mcp.changes.creation import (
+        CreateAdGroup,
+        CreateCampaign,
+        RenameAdGroup,
+        RenameCampaign,
+    )
     from googleads_mcp.changes.targeting import (
         AdSchedule,
         AudienceTargeting,
@@ -72,6 +78,11 @@ def all_kinds() -> list[ChangeKind]:
         AddSitelinks(),
         AddCallouts(),
         AddStructuredSnippets(),
+        # creation and naming
+        CreateCampaign(),
+        CreateAdGroup(),
+        RenameCampaign(),
+        RenameAdGroup(),
     ]
 
 
