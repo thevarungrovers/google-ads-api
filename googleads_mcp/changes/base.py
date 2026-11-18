@@ -131,6 +131,13 @@ def amount_of(rendered: str) -> Decimal:
     return Decimal(rendered.split()[0])
 
 
+def _decimal(raw: Any) -> Decimal:
+    try:
+        return Decimal(str(raw or "0"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
 @dataclass
 class LedgerItem:
     """One row in the ledger: one entity, one field, one before/after.
@@ -221,6 +228,55 @@ def narrowed_campaigns(entry: dict[str, Any]) -> list[str] | None:
     return None if narrowed is None else [str(c) for c in narrowed]
 
 
+def undone_change(entry: dict[str, Any]) -> dict[str, Any] | None:
+    """For a REVERT's row, the change it undid -- which reverting it puts back.
+
+    Every inverse row carries ``detail["undoes"]``: the undone row's projected
+    delta, the campaigns it narrowed (None if it did not narrow) and its
+    batch. Reverting a revert re-applies that change, so it costs what that
+    change cost, and re-runs its checks. None for an original change, and for
+    a revert row written before this was recorded.
+    """
+    undone = (entry.get("detail") or {}).get("undoes")
+    return undone if isinstance(undone, dict) else None
+
+
+def entry_campaigns(entry: dict[str, Any]) -> list[str] | None:
+    """The campaign(s) a ledger row touched; [] for an account-level change,
+    None when the row cannot say (it predates the scope being recorded).
+
+    Older rows are read from what they did carry: a detail's campaign_id, the
+    campaigns a narrowing recorded, or a campaign entity's own id.
+    """
+    detail = entry.get("detail") or {}
+    if "scope_campaigns" in detail:
+        return [str(c) for c in detail["scope_campaigns"]]
+    if detail.get("campaign_id"):
+        return [str(detail["campaign_id"])]
+    if detail.get("narrowing"):
+        return [str(c) for c in detail["narrowing"]]
+    entity_id = str(entry.get("entity_id") or "")
+    if entry.get("entity_type") == "campaign":
+        head = entity_id.split("~", 1)[0]
+        if head.isdigit():
+            return [head]
+    return None
+
+
+def money_reapply_checks(entry: dict[str, Any], ceiling_name: str, ceiling: Decimal,
+                         pct_name: str, pct_limit: float) -> list[Check]:
+    """The ceiling and increase checks for putting ``entry['before']`` back over
+    ``entry['after']`` -- a money value moving the way the original moved it."""
+    from googleads_mcp.guardrails import check_ceiling, check_pct_increase
+
+    try:
+        now, wanted = amount_of(entry["after"]), amount_of(entry["before"])
+    except (InvalidOperation, ValueError, IndexError):
+        return []
+    return [check_ceiling(ceiling_name, wanted, ceiling),
+            check_pct_increase(pct_name, now, wanted, pct_limit)]
+
+
 class ChangeKind:
     """One sort of change. Subclass, fill in the four methods, register it.
 
@@ -305,18 +361,46 @@ class ChangeKind:
         Kinds whose revert resumes delivery some other way (undoing a pause)
         override this.
         """
-        narrowed = narrowed_campaigns(entry)
+        narrowed = self.narrowed_for(entry)
         if narrowed is not None:
             from googleads_mcp.changes.common import campaign_headroom
 
             restored = sum((campaign_headroom(ctx, c)[0] for c in narrowed), Decimal("0"))
             return restored, restored > 0
-        try:
-            original = Decimal(str(entry.get("projected_daily_spend_delta") or "0"))
-        except (InvalidOperation, ValueError):
-            original = Decimal("0")
-        restored = max(-original, Decimal("0"))
+        undone = undone_change(entry)
+        if undone is not None:
+            # Reverting a revert RE-APPLIES the change it undid. A narrowing
+            # re-narrows (free); anything else costs what it cost the first time.
+            if undone.get("narrowing") is not None:
+                return Decimal("0"), False
+            restored = max(_decimal(undone.get("projected")), Decimal("0"))
+            return restored, restored > 0
+        restored = max(-_decimal(entry.get("projected_daily_spend_delta")), Decimal("0"))
         return restored, restored > 0
+
+    def narrowed_for(self, entry: dict[str, Any]) -> list[str] | None:
+        """The campaigns ``entry``'s change narrowed, or None if it did not."""
+        return narrowed_campaigns(entry)
+
+    def reapplies(self, entry: dict[str, Any]) -> bool:
+        """Whether reverting ``entry`` re-applies a change that did not narrow.
+
+        Then it is not "restoring a state the account had" but the original
+        change again, so the engine holds it to the per-change limit and to
+        :meth:`reapply_checks`, as the original's preview did.
+        """
+        if type(self).revert_projection is not ChangeKind.revert_projection:
+            return False
+        if self.narrowed_for(entry) is not None:
+            return False
+        undone = undone_change(entry)
+        return undone is not None and undone.get("narrowing") is None
+
+    def reapply_checks(self, ctx, entry: dict[str, Any]) -> list[Check]:
+        """The kind's own bounds on moving ``entry['after']`` back to
+        ``entry['before']`` when that re-applies an earlier change (an
+        increase ratio, a ceiling). Empty for a kind with none."""
+        return []
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         """Today's value for a ledger entry's field, as the entry stored it.

@@ -68,6 +68,14 @@ def modifier_change_checks(ctx, before: Decimal, after: Decimal) -> list[Check]:
     return [modifier_check(ctx, after), change]
 
 
+def modifier_reapply_checks(ctx, entry: dict[str, Any]) -> list[Check]:
+    """modifier_change_checks for moving ``entry['after']`` back to ``entry['before']``."""
+    def pct(rendered: str) -> Decimal:
+        return Decimal("0") if rendered == NOTHING else pct_of(rendered)
+
+    return modifier_change_checks(ctx, pct(entry["after"]), pct(entry["before"]))
+
+
 def _modifier_pct(criterion) -> Decimal:
     """A criterion's modifier as a percentage, -100 when it is EXCLUDED."""
     return pct_from_modifier(modifier_of(criterion))
@@ -390,6 +398,9 @@ class DeviceBidModifier(ChangeKind):
         detail = entry.get("detail") or {}
         return self._state(ctx, detail["campaign_id"], detail["device"])[0]
 
+    def reapply_checks(self, ctx, entry):
+        return modifier_reapply_checks(ctx, entry)
+
     def inverse(self, ctx, entry):
         detail = entry.get("detail") or {}
         if entry["before"] == NOTHING:
@@ -467,6 +478,9 @@ class LocationBidModifier(ChangeKind):
 
     def current_for_entry(self, ctx, entry):
         return self._rendered(ctx, *entry["entity_id"].split("~"))
+
+    def reapply_checks(self, ctx, entry):
+        return modifier_reapply_checks(ctx, entry)
 
     def inverse(self, ctx, entry):
         campaign_id, criterion_id = entry["entity_id"].split("~")

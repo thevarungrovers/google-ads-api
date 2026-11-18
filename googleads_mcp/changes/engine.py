@@ -40,7 +40,8 @@ from googleads_mcp.changes.base import (
     ChangeKind,
     LedgerItem,
     Proposal,
-    narrowed_campaigns,
+    entry_campaigns,
+    undone_change,
 )
 from googleads_mcp.guardrails import (
     Check,
@@ -358,12 +359,14 @@ class Engine:
         # that counts against the session and daily totals like any enable
         # (exempt, like one, from the per-change limit).
         projected, _ = kind.revert_projection(ctx, entry)
+        if kind.reapplies(entry):
+            self._refuse_reapplication(kind, [entry], projected)
         self._refuse_if_over_caps(projected, 1)
         plan = kind.inverse(ctx, entry)
 
         _, entry_ids, _ = self._send_recorded(
             plan,
-            [self._inverse_item(entry)],
+            [self._inverse_item(kind, entry)],
             tool="revert_change",
             projected=projected,
             weight=1,
@@ -396,17 +399,35 @@ class Engine:
         # A narrowing batch carries the same campaign on every row; reopening
         # it once is the bound, so those are counted per campaign, not per row.
         reopened: set[str] = set()
+        # Re-applying an earlier batch: each of its rows carries the WHOLE
+        # batch's projection, so it is counted once per undone batch.
+        reapplied: dict[str, Decimal] = {}
+        reapplying: list[tuple[ChangeKind, dict[str, Any]]] = []
+        kinds = []
         for entry in live:
             kind = self.kind_for_entry(entry)
+            kinds.append(kind)
             if not kind.revertible:
                 kind.inverse(ctx, entry)
             self._not_stale(kind, entry)
-            narrowed = narrowed_campaigns(entry)
-            if narrowed is not None and type(kind).revert_projection is ChangeKind.revert_projection:
+            narrowed = kind.narrowed_for(entry)
+            default = type(kind).revert_projection is ChangeKind.revert_projection
+            if narrowed is not None and default:
                 reopened.update(narrowed)
+            elif kind.reapplies(entry):
+                reapplying.append((kind, entry))
+                undone = undone_change(entry) or {}
+                key = undone.get("batch_id") or entry["entry_id"]
+                reapplied[key] = kind.revert_projection(ctx, entry)[0]
             else:
                 projected += kind.revert_projection(ctx, entry)[0]
             plans.append(kind.inverse(ctx, entry))
+        if reapplying:
+            total = sum(reapplied.values(), Decimal("0"))
+            for kind in {type(k): k for k, _ in reapplying}.values():
+                rows = [e for k, e in reapplying if type(k) is type(kind)]
+                self._refuse_reapplication(kind, rows, total)
+            projected += total
         if reopened:
             from googleads_mcp.changes.common import campaign_headroom
 
@@ -417,7 +438,7 @@ class Engine:
 
         _, entry_ids, new_batch = self._send_recorded(
             plan,
-            [self._inverse_item(e) for e in live],
+            [self._inverse_item(k, e) for k, e in zip(kinds, live)],
             tool="revert_change",
             projected=projected,
             weight=1,
@@ -484,13 +505,46 @@ class Engine:
                 f"at list_my_changes and the Google Ads UI before deciding."
             )
 
+    def _refuse_reapplication(self, kind: ChangeKind, entries: list[dict[str, Any]],
+                              projected: Decimal) -> None:
+        """Reverting a revert puts the ORIGINAL change back, so it answers to the
+        checks the original's preview ran: the per-change limit (which a plain
+        revert, restoring a state the account had, is exempt from) and the
+        kind's own bounds -- an increase ratio, a ceiling. The limits may have
+        been tightened since, and then the re-application is refused."""
+        checks = [check_projected_delta(self.ctx.limits, max(projected, Decimal("0")))]
+        for entry in entries:
+            checks.extend(kind.reapply_checks(self.ctx, entry))
+        if any_failed(checks):
+            failed = "; ".join(c.render() for c in checks if not c.ok)
+            raise ValueError(
+                f"Reverting {entries[0]['entry_id']} would re-apply a change it undid, "
+                f"and that change no longer passes its checks: {failed}. Preview it "
+                "afresh with the matching preview_* tool instead."
+            )
+
     @staticmethod
-    def _inverse_item(entry: dict[str, Any]) -> LedgerItem:
-        # The undo of a narrowing WIDENS, so its own row must not claim to
-        # narrow: undoing the undo re-narrows, which is free.
-        detail = entry.get("detail")
-        if isinstance(detail, dict) and "narrowing" in detail:
-            detail = {k: v for k, v in detail.items() if k != "narrowing"} or None
+    def _inverse_item(kind: ChangeKind, entry: dict[str, Any]) -> LedgerItem:
+        """The revert's own row, recording what undoing IT would cost.
+
+        Reverting this row re-applies ``entry``, so the row carries ``entry``'s
+        projection and narrowing under ``undoes``. The undo of a narrowing
+        WIDENS, so the row itself never claims to narrow -- unless ``entry``
+        was itself the undo of a narrowing: then this row puts that narrowing
+        back, and undoing it reopens the same campaigns again.
+        """
+        detail = dict(entry.get("detail") or {})
+        detail.pop("narrowing", None)
+        detail.pop("undoes", None)
+        detail["undoes"] = {
+            "entry_id": entry["entry_id"],
+            "projected": str(entry.get("projected_daily_spend_delta") or "0"),
+            "narrowing": kind.narrowed_for(entry),
+            "batch_id": entry.get("batch_id"),
+        }
+        previous = undone_change(entry)
+        if previous is not None and previous.get("narrowing") is not None:
+            detail["narrowing"] = list(previous["narrowing"])
         return LedgerItem(
             entity_type=entry["entity_type"],
             entity_id=str(entry["entity_id"]),
@@ -515,28 +569,6 @@ class Engine:
             session=self.ctx.counters.snapshot(),
             daily=self.ctx.daily_snapshot(),
         )
-
-
-def entry_campaigns(entry: dict[str, Any]) -> list[str] | None:
-    """The campaign(s) a ledger row touched; [] for an account-level change,
-    None when the row cannot say (it predates the scope being recorded).
-
-    Older rows are read from what they did carry: a detail's campaign_id, the
-    campaigns a narrowing recorded, or a campaign entity's own id.
-    """
-    detail = entry.get("detail") or {}
-    if "scope_campaigns" in detail:
-        return [str(c) for c in detail["scope_campaigns"]]
-    if detail.get("campaign_id"):
-        return [str(detail["campaign_id"])]
-    if detail.get("narrowing"):
-        return [str(c) for c in detail["narrowing"]]
-    entity_id = str(entry.get("entity_id") or "")
-    if entry.get("entity_type") == "campaign":
-        head = entity_id.split("~", 1)[0]
-        if head.isdigit():
-            return [head]
-    return None
 
 
 def merge_plans(plans: list[Any]):

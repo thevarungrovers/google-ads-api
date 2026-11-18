@@ -25,6 +25,7 @@ from googleads_mcp.changes.base import (
     Proposal,
     amount_of,
     money,
+    money_reapply_checks,
     parse_decimal,
     with_currency,
 )
@@ -337,6 +338,10 @@ class KeywordCpcBid(ChangeKind):
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         return self._rendered(ctx, _keyword_row(ctx, *_split(entry["entity_id"])))
+
+    def reapply_checks(self, ctx, entry: dict[str, Any]) -> list[Check]:
+        return money_reapply_checks(entry, "max_cpc_bid", ctx.limits.max_cpc_bid,
+                                    "max_bid_increase_pct", ctx.limits.max_bid_increase_pct)
 
     def inverse(self, ctx, entry: dict[str, Any]):
         ad_group_id, criterion_id = _split(entry["entity_id"])

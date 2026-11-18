@@ -13,6 +13,7 @@ from googleads_mcp.changes.base import (
     Proposal,
     amount_of,
     money,
+    money_reapply_checks,
     parse_decimal,
     with_currency,
 )
@@ -201,6 +202,10 @@ class CampaignDailyBudget(ChangeKind):
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         return self._rendered(ctx, entry["entity_id"])
+
+    def reapply_checks(self, ctx, entry: dict[str, Any]) -> list[Check]:
+        return money_reapply_checks(entry, "max_daily_budget", ctx.limits.max_daily_budget,
+                                    "max_budget_change_pct", ctx.limits.max_budget_change_pct)
 
     def inverse(self, ctx, entry: dict[str, Any]):
         return campaigns.plan_set_budget(
