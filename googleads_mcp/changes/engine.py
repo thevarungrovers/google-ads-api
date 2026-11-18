@@ -62,6 +62,10 @@ from googleads_mcp.previews import (
 )
 
 
+class RevertOutOfScope(RuntimeError):
+    """A revert of an entry outside today's customer or campaign scope."""
+
+
 class Engine:
     """Runs kinds against one :class:`~.context.WriteContext`."""
 
@@ -110,6 +114,15 @@ class Engine:
         ctx = self.ctx
         proposal: Proposal = kind.propose(ctx, **args)
         items = proposal.ledger_items()
+        # Which campaigns this touches, on every row, so a revert can be held
+        # to the campaign scope as it stands THEN, not as it stood at apply.
+        scope = (
+            [str(proposal.campaign_id)] if proposal.campaign_id is not None
+            else [str(c) for c in (proposal.narrowed_campaigns or [])]
+        )
+        if scope:
+            for item in items:
+                item.detail = {**(item.detail or {}), "scope_campaigns": scope}
         if proposal.narrows or kind.narrows:
             # Recorded on the row, because undoing a narrowing WIDENS delivery
             # and the revert has to know which campaigns' budgets it reopens.
@@ -334,6 +347,7 @@ class Engine:
                 return self._revert_batch(entry_id, batch)
             raise ValueError(f"No ledger entry {entry_id!r}. See list_my_changes.")
         self._revertible(entry)
+        self._in_scope(entry)
         kind = self.kind_for_entry(entry)
         if not kind.revertible:
             kind.inverse(ctx, entry)  # raises, with the kind's own reason
@@ -375,6 +389,8 @@ class Engine:
                 f"Batch {batch_id} has nothing left to revert: every entry in it "
                 "was never applied or has already been reverted."
             )
+        for entry in live:
+            self._in_scope(entry)
         plans = []
         projected = Decimal("0")
         # A narrowing batch carries the same campaign on every row; reopening
@@ -423,6 +439,36 @@ class Engine:
         if entry["entry_id"] in ledger.reverted_entry_ids():
             raise ValueError(f"Entry {entry['entry_id']} has already been reverted.")
 
+    def _in_scope(self, entry: dict[str, Any]) -> None:
+        """The scope checks every preview runs, against the ENTRY's own customer
+        and campaign(s). The scope may have been narrowed since the change was
+        made, and find_entry reaches back over every session's changes."""
+        ctx = self.ctx
+        customer = str(entry.get("customer_id") or "")
+        checks = [check_customer_in_scope(ctx.limits, customer, ctx.default_customer)]
+        target = ctx.target_customer()
+        if customer != target:
+            # The inverse is sent to the write client's customer, so an entry
+            # from another account would be "undone" in the wrong one.
+            checks.append(Check("same_customer", False,
+                                f"entry is for {customer or '(unknown)'}, writes go to {target}"))
+        campaigns = entry_campaigns(entry)
+        if campaigns is None:
+            if ctx.limits.allowed_campaign_ids:
+                checks.append(Check(
+                    "campaign_in_scope", False,
+                    "cannot tell which campaign this entry touched, and a campaign "
+                    "scope is configured",
+                ))
+        else:
+            checks.extend(check_campaign_in_scope(ctx.limits, c) for c in campaigns)
+        if any_failed(checks):
+            failed = "; ".join(c.render() for c in checks if not c.ok)
+            raise RevertOutOfScope(
+                f"Entry {entry['entry_id']} is outside the write scope, so it cannot "
+                f"be reverted here: {failed}"
+            )
+
     def _not_stale(self, kind: ChangeKind, entry: dict[str, Any]) -> None:
         # STALENESS, the same check apply does. If the value is no longer what
         # our change left behind, somebody moved it since -- most often a
@@ -469,6 +515,28 @@ class Engine:
             session=self.ctx.counters.snapshot(),
             daily=self.ctx.daily_snapshot(),
         )
+
+
+def entry_campaigns(entry: dict[str, Any]) -> list[str] | None:
+    """The campaign(s) a ledger row touched; [] for an account-level change,
+    None when the row cannot say (it predates the scope being recorded).
+
+    Older rows are read from what they did carry: a detail's campaign_id, the
+    campaigns a narrowing recorded, or a campaign entity's own id.
+    """
+    detail = entry.get("detail") or {}
+    if "scope_campaigns" in detail:
+        return [str(c) for c in detail["scope_campaigns"]]
+    if detail.get("campaign_id"):
+        return [str(detail["campaign_id"])]
+    if detail.get("narrowing"):
+        return [str(c) for c in detail["narrowing"]]
+    entity_id = str(entry.get("entity_id") or "")
+    if entry.get("entity_type") == "campaign":
+        head = entity_id.split("~", 1)[0]
+        if head.isdigit():
+            return [head]
+    return None
 
 
 def merge_plans(plans: list[Any]):
