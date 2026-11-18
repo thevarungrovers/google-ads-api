@@ -428,3 +428,47 @@ def test_invisible_and_format_characters_are_refused(bad):
 
 def test_visible_unicode_is_kept():
     assert stamp(BOTH, "été café ü", entity_type="campaign").final == "AB-max-été café ü"
+
+
+# -- look-alike prefixes ------------------------------------------------------
+
+
+@pytest.mark.parametrize("identity, requested", [
+    (OWNER_ONLY, "bоt-x"),         # Cyrillic o: AB-bоt-x reads as agent bot's
+    (OWNER_ONLY, "bot‑x"),         # non-breaking hyphen
+    (NEITHER, "CД-bot-x"),         # Cyrillic De
+    (NEITHER, "CD-bot‑x"),
+    (NEITHER, "CD－bot-x"),         # fullwidth hyphen-minus
+    (NEITHER, "ＣＤ-bot-x"),    # fullwidth capitals
+    (NEITHER, "ΑΒ-bot-x"),    # Greek Alpha Beta
+    (BOTH, "АВ-bot-x"),       # Cyrillic AB as a base under AB-max
+    (BOTH, "AB-max-АВ-bot-x"),
+    (BOTH, "АВ-max-x"),       # our own prefix, disguised
+    (OWNER_ONLY, "АВ-x"),
+    (AGENT_ONLY, "mаx-x"),
+])
+def test_a_prefix_spelt_with_look_alike_characters_is_refused(identity, requested):
+    """Folded to ASCII, these read as somebody's OWNER-agent- prefix (or ours)."""
+    with pytest.raises(NameRefused, match="look-alike"):
+        stamp(identity, requested, entity_type="campaign")
+
+
+@pytest.mark.parametrize("name", ["Café-Paris-promo", "Summer – Sale", "Paris-café",
+                                  "Été – soldes", "Москва-x",
+                                  "CD–Paris", "x — bot — y"])
+def test_plain_non_ascii_names_are_used_as_given(name):
+    """No identity: names are used exactly as given unless they READ as a prefix."""
+    assert stamp(NEITHER, name, entity_type="campaign").final == name
+    assert naming.final_name_problems(name, "campaign") == []
+
+
+@pytest.mark.parametrize("base", ["Саfе-x", "été-x", "АВ-x", "x–y"])
+def test_non_ascii_after_a_valid_prefix_is_kept(base):
+    assert stamp(BOTH, base, entity_type="campaign").final == "AB-max-" + base
+
+
+def test_the_request_backstop_catches_a_look_alike_prefix():
+    """final_name_problems, which the engine runs on every name sent, catches
+    a disguised full prefix even with no identity to compare against."""
+    problems = naming.final_name_problems("AB-bоt-x", "campaign")
+    assert any("look-alike" in p and "AB-bot-" in p for p in problems)

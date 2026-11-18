@@ -95,6 +95,54 @@ def _invisible(text: str) -> str | None:
 #: The full form, ``OWNER-agent-base``. Only this form can be told apart from
 #: a base that merely contains a hyphen.
 _FULL = re.compile(r"([A-Z]{2,4})-([a-z][a-z0-9_]{1,23})-(.+)", re.S)
+#: The head of the full form, matched against a name's skeleton.
+_FULL_HEAD = re.compile(r"[A-Z]{2,4}-[a-z][a-z0-9_]{1,23}-")
+
+#: Dash-like characters that are not all category Pd (minus sign, hyphen
+#: bullet, modifier minus). Every Pd character folds to "-" as well.
+_DASHES = frozenset("‐‑‒–—―−﹘﹣－⁃˗")
+#: Cyrillic and Greek letters that read as Latin ones. A small explicit table:
+#: it only has to cover what a prefix is made of (A-Z, a-z, 0-9, _).
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y", "і": "i",
+    "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ӏ": "l", "ԛ": "q", "ԝ": "w",
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P",
+    "С": "C", "Т": "T", "Х": "X", "Ѕ": "S", "І": "I", "Ј": "J", "Д": "D",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+    "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X", "Υ": "Y",
+    "ο": "o", "ν": "v",
+})
+
+
+def _fold(char: str) -> str:
+    """One character as the ASCII it reads as, where it reads as one."""
+    folded = unicodedata.normalize("NFKC", char)
+    if len(folded) == 1 and (folded in _DASHES or unicodedata.category(folded) == "Pd"):
+        return "-"
+    return folded.translate(_CONFUSABLES)
+
+
+def look_alike_prefix(text: str, prefix: str = "") -> str | None:
+    """The prefix ``text`` would READ as through look-alike characters, or None.
+
+    ``text`` is folded to a skeleton (NFKC, dashes to "-", Cyrillic/Greek
+    look-alikes to Latin). If the skeleton starts with a full ``OWNER-agent-``
+    prefix -- or with ``prefix``, this checkout's own -- and the original
+    differs from the skeleton in exactly that head, the name is a disguised
+    prefix: "CД-bot-x", "CD-bot‑x", "bоt-x" under initials. Only the
+    head is compared, so non-ASCII in the base after it is untouched, and a
+    plain name ("Summer – Sale", "Café-Paris") never matches the pattern.
+    """
+    skeleton, ends = "", []
+    for index, char in enumerate(text):
+        skeleton += _fold(char)
+        ends.append((len(skeleton), index + 1))
+    found = _FULL_HEAD.match(skeleton)
+    head = found.group(0) if found else (prefix if prefix and skeleton.startswith(prefix) else "")
+    if not head:
+        return None
+    original = next((text[:i] for length, i in ends if length >= len(head)), text)
+    return None if original == head else head
 
 
 class NameRefused(ValueError):
@@ -337,6 +385,8 @@ def final_name_problems(name: str, entity_type: str) -> list[str]:
     out = []
     if (char := _invisible(name)) is not None:
         out.append(f"contains an invisible or control character ({char})")
+    if (disguised := look_alike_prefix(name)) is not None:
+        out.append(f"reads as {disguised} through look-alike characters")
     limit = NAME_LIMITS.get(entity_type)
     if limit is not None and length_of(name, entity_type) > limit[0]:
         out.append(f"{length_of(name, entity_type)} {limit[1]} against {limit[0]}")
@@ -452,6 +502,13 @@ def stamp(identity: Identity, requested: str, *, entity_type: str) -> Stamped:
             f"The name contains an invisible or control character ({char}); names may "
             "hold only visible characters and plain spaces."
         )
+    for text in (requested, base, prefix + base):
+        if (disguised := look_alike_prefix(text, prefix)) is not None:
+            raise NameRefused(
+                f"the name {text!r} reads as {disguised} -- a prefix -- through look-alike "
+                "characters (Cyrillic or Greek letters, a non-ASCII dash or a fullwidth "
+                "form). Use plain ASCII there, or reorder the base."
+            )
     forged = foreign(identity, prefix + base) if prefix else None
     if forged is not None:
         # Initials only: "AB-" + "bot-x" reads as agent bot's name.

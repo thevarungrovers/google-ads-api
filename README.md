@@ -342,6 +342,11 @@ double it. Also refused, at preview:
 - with **initials only**, a base that starts with a lowercase word and a `-`
   (`bot-x` would make `AB-bot-x`, which reads as agent `bot`'s) -- use `_` or
   reorder it;
+- a prefix **spelt with look-alike characters** -- `CД-bot-x` (Cyrillic),
+  `CD‑bot-x` (a non-ASCII dash), `ＣＤ-bot-x` (fullwidth), or your own
+  prefix disguised the same way. Only the head where a prefix would sit is
+  checked: `Café-Paris-promo` or `Summer – Sale` are used as given, and
+  anything after a valid prefix may be any visible text;
 - control and invisible characters (a zero-width space, a line separator),
   which would make two names that look the same differ.
 
