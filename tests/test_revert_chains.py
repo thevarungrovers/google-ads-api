@@ -220,3 +220,122 @@ def test_reverting_a_bidding_strategy_revert_puts_the_original_target_back():
     engine.revert(undo.entry_id)
     assert client.applied[-1]["operations"][0].update.maximize_conversions.target_cpa_micros \
         == 18_000_000
+
+
+# -- mixed changes: one change that both narrows AND widens ----------------
+#
+# A change can turn one thing off and another on. It is recorded as a
+# narrowing (its undo widens), but it also projected headroom of its own, and
+# re-applying it puts that widening back. Re-applying is free only when the
+# change was a PURE narrowing -- and those were recorded at 0 anyway.
+
+
+def mixed_networks_rig(**over):
+    engine, client, _ = rig(**over)
+
+    def settle(after):
+        client.answer("FROM campaign\n", [row(**{
+            "campaign.id": 11, "campaign.name": "Example campaign", "campaign.status": "ENABLED",
+            "campaign.resource_name": f"customers/{CUSTOMER}/campaigns/11",
+            "campaign_budget.id": 5, "campaign_budget.amount_micros": 30_000_000,
+            "campaign.network_settings.target_search_network": "search_partners=on" in after,
+            "campaign.network_settings.target_content_network": "display_network=on" in after,
+        })])
+
+    settle("display_network=off, search_partners=on")
+    kind = engine.add(CampaignNetworks())
+    return engine, client, kind, settle
+
+
+def test_mixed_networks_reverted_five_deep_charges_every_reapplication():
+    """Search Partners OFF + Display ON: the change widens (29.00) and narrows.
+    Every step of the chain either re-opens Search Partners or re-enables
+    Display, so none of them is free."""
+    engine, client, kind, settle = mixed_networks_rig()
+    preview, result = preview_and_apply(engine, kind, campaign_id="11",
+                                        search_partners=False, display_network=True)
+    assert Decimal(preview.projected_daily_spend_delta) == HEADROOM
+    settle("display_network=on, search_partners=off")
+    assert chain(engine, result.entry_id, settle, 4) == [HEADROOM] * 4
+
+
+def test_a_reapplied_mixed_networks_change_answers_to_the_per_change_limit():
+    engine, client, kind, settle = mixed_networks_rig()
+    _, result = preview_and_apply(engine, kind, campaign_id="11",
+                                  search_partners=False, display_network=True)
+    settle("display_network=on, search_partners=off")
+    undo = engine.revert(result.entry_id)
+    settle(ledger.find_entry(undo.entry_id)["after"])
+    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
+    sent = len(client.applied)
+    with pytest.raises(Exception, match="projected_delta_per_day"):
+        engine.revert(undo.entry_id)
+    assert len(client.applied) == sent
+
+
+def test_a_pure_narrowing_still_reapplies_for_free():
+    engine, client, kind, settle = mixed_networks_rig()
+    _, result = preview_and_apply(engine, kind, campaign_id="11", search_partners=False)
+    settle("display_network=off, search_partners=off")
+    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
+    # The undo restores a state the account had (exempt); the redo re-narrows
+    # (0, so it passes the per-change limit it is now held to).
+    assert chain(engine, result.entry_id, settle, 2) == [HEADROOM, 0]
+
+
+def created_criterion_present(client):
+    client.answer("campaign_criterion.resource_name =", [row(**{
+        "campaign_criterion.resource_name": "x", "campaign_criterion.status": "ENABLED"})])
+
+
+def test_first_schedule_windows_with_a_raised_modifier_reapply_at_headroom():
+    """The first windows narrow (the campaign served around the clock) but a
+    +20% modifier widens inside them: re-applying that is not free."""
+    from googleads_mcp.changes.targeting import AdSchedule
+
+    engine, client, _ = rig()
+    campaign(client)
+    kind = engine.add(AdSchedule())
+    preview, result = preview_and_apply(engine, kind, campaign_id="11", windows=[
+        {"day": "MONDAY", "start_hour": 8, "end_hour": 20, "bid_modifier_pct": "+20"}])
+    assert Decimal(preview.projected_daily_spend_delta) == HEADROOM
+    created_criterion_present(client)
+    undo = engine.revert(result.entry_id)
+    assert Decimal(undo.projected_daily_spend_delta) == HEADROOM
+    row_ = ledger.find_entry(undo.entry_id)
+    assert kind.revert_projection(engine.ctx, row_)[0] == HEADROOM
+    assert kind.reapplies(row_)
+    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
+    client.answer("campaign_criterion.resource_name =", [])
+    sent = len(client.applied)
+    with pytest.raises(Exception, match="projected_delta_per_day"):
+        engine.revert(undo.entry_id)
+    assert len(client.applied) == sent
+
+
+def test_location_add_and_exclude_reapply_at_headroom():
+    """Adding a target to a campaign that has one widens; the exclusion in the
+    same request narrows. Re-applying the pair re-widens."""
+    from googleads_mcp.changes.targeting import CampaignLocations
+
+    engine, client, _ = rig()
+    campaign(client)
+    client.answer("campaign_criterion.type = 'LOCATION'", [row(**{
+        "campaign_criterion.criterion_id": 1000,
+        "campaign_criterion.location.geo_target_constant": "geoTargetConstants/1000",
+    })])
+    kind = engine.add(CampaignLocations())
+    preview, result = preview_and_apply(engine, kind, campaign_id="11", add=["3000"],
+                                        exclude=["2000"])
+    assert Decimal(preview.projected_daily_spend_delta) == HEADROOM
+    created_criterion_present(client)
+    undo = engine.revert(result.batch_id)
+    rows = [ledger.find_entry(e) for e in undo.entry_ids]
+    assert all(kind.revert_projection(engine.ctx, r)[0] == HEADROOM for r in rows)
+    assert all(kind.reapplies(r) for r in rows)
+    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
+    client.answer("campaign_criterion.resource_name =", [])
+    sent = len(client.applied)
+    with pytest.raises(Exception, match="projected_delta_per_day"):
+        engine.revert(undo.batch_id)
+    assert len(client.applied) == sent

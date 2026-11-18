@@ -384,10 +384,12 @@ class ChangeKind:
             return restored, restored > 0
         undone = undone_change(entry)
         if undone is not None:
-            # Reverting a revert RE-APPLIES the change it undid. A narrowing
-            # re-narrows (free); anything else costs what it cost the first time.
-            if undone.get("narrowing") is not None:
-                return Decimal("0"), False
+            # Reverting a revert RE-APPLIES the change it undid, and costs what
+            # it cost the first time. Not "free because it narrowed": a change
+            # can narrow AND widen at once (Search Partners off + Display on,
+            # first schedule windows with a raised modifier, a location added
+            # with an exclusion), and its re-application widens again. A PURE
+            # narrowing was recorded at 0, so it stays free without a special case.
             restored = max(_decimal(undone.get("projected")), Decimal("0"))
             return restored, restored > 0
         restored = max(-_decimal(entry.get("projected_daily_spend_delta")), Decimal("0"))
@@ -410,18 +412,21 @@ class ChangeKind:
         return entry_campaigns(entry) or []
 
     def reapplies(self, entry: dict[str, Any]) -> bool:
-        """Whether reverting ``entry`` re-applies a change that did not narrow.
+        """Whether reverting ``entry`` re-applies a change it undid.
 
-        Then it is not "restoring a state the account had" but the original
+        True for EVERY revert's row (one that carries ``undoes``), narrowing
+        or not: it is not "restoring a state the account had" but an earlier
         change again, so the engine holds it to the per-change limit and to
-        :meth:`reapply_checks`, as the original's preview did.
+        :meth:`reapply_checks`, as that change's preview did -- on the single
+        and the batch path alike. A pure narrowing re-applies at 0 and passes.
+
+        Kinds that override :meth:`revert_projection` (a status: undoing a
+        pause) project an ENABLE, which is exempt from the per-change limit
+        by design (see ``Proposal.is_enable``), so they are not held to it.
         """
         if type(self).revert_projection is not ChangeKind.revert_projection:
             return False
-        if self.narrowed_for(entry) is not None:
-            return False
-        undone = undone_change(entry)
-        return undone is not None and undone.get("narrowing") is None
+        return undone_change(entry) is not None
 
     def inverse_detail(self, detail: dict[str, Any]) -> dict[str, Any]:
         """The ``detail`` for a revert's own row, given the reverted row's.

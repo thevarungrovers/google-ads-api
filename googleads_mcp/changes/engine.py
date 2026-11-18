@@ -459,7 +459,7 @@ class Engine:
             self._not_stale(kind, entry)
             narrowed = kind.narrowed_for(entry)
             default = type(kind).revert_projection is ChangeKind.revert_projection
-            if narrowed is not None and default:
+            if narrowed is not None and default and not kind.reapplies(entry):
                 reopened.update(narrowed)
             elif kind.reapplies(entry):
                 reapplying.append((kind, entry))
