@@ -379,8 +379,20 @@ class ChangeKind:
         return restored, restored > 0
 
     def narrowed_for(self, entry: dict[str, Any]) -> list[str] | None:
-        """The campaigns ``entry``'s change narrowed, or None if it did not."""
-        return narrowed_campaigns(entry)
+        """The campaigns ``entry``'s change narrowed, or None if it did not.
+
+        A kind that ALWAYS narrows (negatives) wrote rows before the engine
+        recorded ``narrowing``; such an original row still narrowed, so it
+        falls back to the kind's flag and the campaigns the row touched. A
+        revert's row never does: undoing a negative widens.
+        """
+        narrowed = narrowed_campaigns(entry)
+        if narrowed is not None or not self.narrows:
+            return narrowed
+        detail = entry.get("detail") or {}
+        if "undoes" in detail or entry.get("tool") == "revert_change":
+            return None
+        return entry_campaigns(entry) or []
 
     def reapplies(self, entry: dict[str, Any]) -> bool:
         """Whether reverting ``entry`` re-applies a change that did not narrow.

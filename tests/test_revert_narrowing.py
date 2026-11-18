@@ -230,3 +230,40 @@ def test_the_revert_row_of_a_narrowing_does_not_count_as_narrowing_again():
     from googleads_mcp import ledger
 
     assert "narrowing" not in (ledger.find_entry(undo.entry_id).get("detail") or {})
+
+
+def legacy_negative_row(entry_id="legacy1", *, tool="apply_add_negative_keywords", detail=None):
+    """A negative-keyword row as written before the engine recorded ``narrowing``."""
+    from googleads_mcp import ledger
+    from kindkit import CUSTOMER
+
+    ledger.write_intent(
+        entry_id=entry_id, tool=tool, customer_id=CUSTOMER,
+        entity_type="negative keyword", entity_id="11:free", entity_name="free",
+        field_name="created", before="(none)", after="present", projected_delta="0",
+        detail=detail if detail is not None else {
+            "level": "campaign", "target_id": "11", "text": "free", "match_type": "PHRASE",
+            "resource": "campaign_criterion", "scope_campaigns": ["11"]},
+    )
+    ledger.write_outcome(entry_id=entry_id, ok=True,
+                         resource_name="customers/1112223333/campaignCriteria/11~1")
+
+
+def test_a_legacy_negative_row_without_the_narrowing_key_still_projects_headroom():
+    engine, client, _ = rig()
+    campaign(client)
+    kind = engine.add(AddNegativeKeywords())
+    assert ("negative keyword", "created") in kind.ledger_keys
+    legacy_negative_row()
+    created_present(client, "campaign_criterion")
+    assert reverted(engine, "legacy1") == HEADROOM
+
+
+def test_a_legacy_revert_row_of_a_negative_does_not_fall_back_to_narrowing():
+    engine, client, _ = rig()
+    campaign(client)
+    kind = engine.add(AddNegativeKeywords())
+    legacy_negative_row("legacy2", tool="revert_change")
+    from googleads_mcp import ledger
+
+    assert kind.narrowed_for(ledger.find_entry("legacy2")) is None
