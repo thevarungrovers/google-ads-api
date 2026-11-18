@@ -18,7 +18,15 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from googleads_mcp.errors import refusals_reach_the_caller
-from googleads_mcp.tools_read import READ_ONLY
+from googleads_mcp.tools_read import (
+    READ_ONLY,
+    AgentName,
+    Mine,
+    NameOrigin,
+    Owner,
+    naming_fields,
+    naming_filter,
+)
 from googleads_reporting.query import Query, contains, in_list, last_n_days, quote_literal
 
 CAMPAIGN_DETAIL = (
@@ -329,9 +337,13 @@ def register(mcp, state) -> None:
                               [f"campaign_budget.id = {int(c['campaign_budget.id'])}"])
             ]
 
+        from googleads_mcp import ledger
+
         return {
             "campaign_id": str(c["campaign.id"]),
             "name": c["campaign.name"],
+            "naming": naming_fields(state, c["campaign.name"], ledger.created_by_us(
+                "campaign", str(c["campaign.id"]))),
             "status": c["campaign.status"],
             "serving_status": c["campaign.serving_status"],
             "primary_status": c["campaign.primary_status"],
@@ -417,9 +429,14 @@ def register(mcp, state) -> None:
                 "mode": "observation" if getattr(item, "bid_only", False) else "targeting",
             })
         strategy = g["campaign.bidding_strategy_type"]
+        from googleads_mcp import ledger
+
         return {
             "ad_group_id": str(g["ad_group.id"]),
             "name": g["ad_group.name"],
+            "naming": naming_fields(state, g["ad_group.name"], ledger.created_by_us(
+                "ad_group", str(g["ad_group.id"]), campaign_id=str(g["campaign.id"]),
+                name=g["ad_group.name"])),
             "status": g["ad_group.status"],
             "type": g["ad_group.type"],
             "campaign": {"campaign_id": str(g["campaign.id"]), "name": g["campaign.name"],
@@ -644,13 +661,28 @@ def register(mcp, state) -> None:
 
     @mcp.tool(title="List labels", annotations=READ_ONLY)
     @refusals_reach_the_caller
-    def list_labels() -> list[dict[str, Any]]:
-        """Labels in the account, with their ids."""
+    def list_labels(
+        origin: NameOrigin = "any",
+        agent_name: AgentName = None,
+        owner: Owner = None,
+        mine: Mine = False,
+    ) -> list[dict[str, Any]]:
+        """Labels in the account, with their ids, who named each (origin /
+        owner / agent / base) and whether this server created it. Filter on
+        those like find_campaigns."""
+        from googleads_mcp import ledger
+
+        naming_where, keep, _ = naming_filter(state, "label.name", origin=origin,
+                                              agent_name=agent_name, owner=owner, mine=mine)
+        created = ledger.created_index()["label"]
         return [
             {"label_id": str(r["label.id"]), "name": r["label.name"],
              "status": r["label.status"],
-             "description": r["label.text_label.description"] or None}
-            for r in rows(LABEL_FIELDS, "label", ["label.status != 'REMOVED'"], ("label.name",))
+             "description": r["label.text_label.description"] or None,
+             **naming_fields(state, r["label.name"], str(r["label.id"]) in created)}
+            for r in rows(LABEL_FIELDS, "label", ["label.status != 'REMOVED'", *naming_where],
+                          ("label.name",))
+            if keep(r["label.name"])
         ]
 
     @mcp.tool(title="List audience segments", annotations=READ_ONLY)

@@ -24,6 +24,7 @@ from googleads_reporting.query import (
     during,
     last_n_days,
     quote_literal,
+    starts_with,
 )
 from googleads_reporting.reports import REGISTRY, get_report, report_names
 
@@ -68,6 +69,67 @@ def _money(value: Any) -> str:
     return f"{Decimal(str(value or 0)):.2f}"
 
 
+# -- filtering by who named it ---------------------------------------------
+#
+# The same four arguments on every find/list tool that returns named things.
+# Each value is checked against the naming patterns before any GAQL is built,
+# a server-side LIKE narrows the scan where the prefix allows it, and the
+# exact match runs locally (LIKE is case-insensitive and treats _ as a
+# wildcard, so it only narrows).
+
+NameOrigin = Annotated[
+    Literal["any", "agent", "cli", "manual"],
+    Field(description='By name prefix: "agent" (OWNER-agent-...), "cli" (OWNER-cli-...), '
+          '"manual" (no prefix), or "any"'),
+]
+AgentName = Annotated[str | None, Field(description="Only names with this agent part")]
+Owner = Annotated[str | None, Field(description="Only names starting with these initials")]
+Mine = Annotated[bool, Field(description="Only names with THIS server's prefix (from .env)")]
+
+#: How many rows a filtered scan reads before filtering locally.
+NAMING_SCAN = 1000
+
+
+def identity_of(state):
+    from googleads_reporting.naming import Identity
+
+    return getattr(state, "identity", None) or Identity()
+
+
+def naming_filter(state, field: str, *, origin: str, agent_name: str | None,
+                  owner: str | None, mine: bool):
+    """(GAQL conditions, exact local predicate on a name, whether any filter is on)."""
+    from googleads_reporting import naming
+
+    naming.check_filter(owner, agent_name)
+    identity = identity_of(state)
+    if mine and not identity.prefix:
+        raise ValueError(
+            "mine=True needs a naming identity, and none is configured: set "
+            f"{naming.OWNER_KEY} and/or {naming.AGENT_KEY} in the repo's .env."
+        )
+    where = []
+    if mine:
+        where.append(starts_with(field, identity.prefix))
+    elif owner:
+        where.append(starts_with(field, f"{owner}-" + (f"{agent_name}-" if agent_name else "")))
+    elif origin == "cli":
+        where.append(contains(field, f"-{naming.CLI_AGENT}-"))
+
+    def keep(name: str) -> bool:
+        return naming.matches(name, origin=origin, owner=owner, agent_name=agent_name,
+                              mine=mine, identity=identity)
+
+    return where, keep, bool(mine or owner or agent_name or origin != "any")
+
+
+def naming_fields(state, name: str, created: bool) -> dict[str, Any]:
+    """origin / owner / agent / base from the name, and ledger_created from the ledger."""
+    from googleads_reporting import naming
+
+    return {**naming.attribute(name, identity_of(state)), "ledger_created": created}
+
+
 def register(mcp, state) -> None:
     """Attach every read tool to ``mcp``."""
 
@@ -105,13 +167,25 @@ def register(mcp, state) -> None:
             Field(description="ENABLED, PAUSED or REMOVED"),
         ] = None,
         limit: Annotated[int, Field(description="Max rows", ge=1, le=200)] = 50,
+        origin: NameOrigin = "any",
+        agent_name: AgentName = None,
+        owner: Owner = None,
+        mine: Mine = False,
     ) -> list[dict[str, Any]]:
         """Campaigns with their ids, status, channel and daily budget.
 
         Start here. Campaign ids are not visible in the Google Ads UI, so every
-        write tool needs one from this.
+        write tool needs one from this. Each row also says who named it
+        (origin / owner / agent / base, from the OWNER-agent- prefix) and
+        whether this server's ledger shows it created it; filter on those
+        with origin, agent_name, owner or mine.
         """
-        where = []
+        from googleads_mcp import ledger
+
+        naming_where, keep, filtering = naming_filter(
+            state, "campaign.name", origin=origin, agent_name=agent_name, owner=owner,
+            mine=mine)
+        where = list(naming_where)
         if name_contains:
             where.append(contains("campaign.name", name_contains))
         if status:
@@ -122,9 +196,10 @@ def register(mcp, state) -> None:
                 from_resource="campaign",
                 where=tuple(where),
                 order_by=("campaign.name",),
-                limit=limit,
+                limit=NAMING_SCAN if filtering else limit,
             )
         )
+        created = ledger.created_index()["campaign"]
         return [
             {
                 "campaign_id": str(r["campaign.id"]),
@@ -134,9 +209,10 @@ def register(mcp, state) -> None:
                 "budget_id": str(r["campaign_budget.id"]),
                 "daily_budget": _money(r["campaign_budget.amount_micros"]),
                 "currency": r["customer.currency_code"],
+                **naming_fields(state, r["campaign.name"], str(r["campaign.id"]) in created),
             }
-            for r in rows
-        ]
+            for r in rows if keep(r["campaign.name"])
+        ][:limit]
 
     @mcp.tool(title="Find ad groups by name", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -144,14 +220,24 @@ def register(mcp, state) -> None:
         name_contains: Annotated[str | None, Field(description="Substring")] = None,
         campaign_id: Annotated[str | None, Field(description="Restrict to one campaign")] = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 50,
+        origin: NameOrigin = "any",
+        agent_name: AgentName = None,
+        owner: Owner = None,
+        mine: Mine = False,
     ) -> list[dict[str, Any]]:
         """Ad groups with their ids, status, bid and parent campaign.
 
         Ad group names are unique only WITHIN a campaign, so a bare name match
         across the account is routinely ambiguous -- the campaign is included
-        so duplicates can be told apart.
+        so duplicates can be told apart. Rows say who named each ad group and
+        whether this server created it, and filter like find_campaigns.
         """
-        where = []
+        from googleads_mcp import ledger
+
+        naming_where, keep, filtering = naming_filter(
+            state, "ad_group.name", origin=origin, agent_name=agent_name, owner=owner,
+            mine=mine)
+        where = list(naming_where)
         if name_contains:
             where.append(contains("ad_group.name", name_contains))
         if campaign_id:
@@ -166,9 +252,10 @@ def register(mcp, state) -> None:
                 from_resource="ad_group",
                 where=tuple(where),
                 order_by=("ad_group.name",),
-                limit=limit,
+                limit=NAMING_SCAN if filtering else limit,
             )
         )
+        index = ledger.created_index()
         return [
             {
                 "ad_group_id": str(r["ad_group.id"]),
@@ -178,9 +265,12 @@ def register(mcp, state) -> None:
                 "campaign_id": str(r["campaign.id"]),
                 "campaign_name": r["campaign.name"],
                 "currency": r["customer.currency_code"],
+                **naming_fields(state, r["ad_group.name"], ledger.created_by_us(
+                    "ad_group", str(r["ad_group.id"]), campaign_id=str(r["campaign.id"]),
+                    name=r["ad_group.name"], index=index)),
             }
-            for r in rows
-        ]
+            for r in rows if keep(r["ad_group.name"])
+        ][:limit]
 
     @mcp.tool(title="Run a performance report", annotations=READ_ONLY)
     @refusals_reach_the_caller

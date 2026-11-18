@@ -288,6 +288,21 @@ def contains(field_path: str, needle: str) -> str:
     return f"{field_path} LIKE {quote_double('%' + needle + '%')}"
 
 
+def starts_with(field_path: str, prefix: str) -> str:
+    """A case-insensitive prefix match: ``field LIKE "prefix%"``.
+
+    Like :func:`contains`, ``_`` and ``%`` keep their wildcard meaning, so
+    this only NARROWS; callers that need an exact prefix check locally.
+
+    >>> starts_with("campaign.name", "AB-max-")
+    'campaign.name LIKE "AB-max-%"'
+    """
+    _validate_field_path(field_path)
+    if not prefix:
+        raise QueryError("Prefix is empty.")
+    return f"{field_path} LIKE {quote_double(prefix + '%')}"
+
+
 def in_list(field_path: str, values: Iterable[str]) -> str:
     """A ``field IN ('a', 'b')`` condition.
 

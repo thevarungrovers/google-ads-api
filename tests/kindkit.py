@@ -279,8 +279,11 @@ class Registrar:
         return decorate
 
 
-def read_tools(module, monkeypatch, account: ReadAccount, **limit_overrides):
-    """Register ``module``'s read tools against ``account``; return the tools."""
+def read_tools(module, monkeypatch, account: ReadAccount, *, identity=None, **limit_overrides):
+    """Register ``module``'s read tools against ``account``; return the tools.
+
+    ``identity`` is the naming identity (placeholders only); none by default.
+    """
     from googleads_reporting.client import ReadOnlyGoogleAdsClient
 
     client = read_client(account)
@@ -289,6 +292,7 @@ def read_tools(module, monkeypatch, account: ReadAccount, **limit_overrides):
     state = SimpleNamespace(
         limits=lim, counters=SessionCounters(lim), previews=PreviewStore(),
         read_client=client, default_customer_id=CUSTOMER, write_client=None,
+        identity=identity,
     )
     registrar = Registrar()
     module.register(registrar, state)

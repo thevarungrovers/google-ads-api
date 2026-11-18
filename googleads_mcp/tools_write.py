@@ -177,6 +177,68 @@ def register(mcp, state) -> Engine:
             "checked": len(results),
             "drifted": sum(1 for r in results if r["status"] == "drifted"),
             "entries": results,
+            "naming": naming_reconcile(state),
         }
 
     return engine
+
+
+#: GAQL for each named entity type: (resource, id field, name field, parent id field).
+_NAMED = {
+    "campaign": ("campaign", "campaign.id", "campaign.name", None),
+    "ad_group": ("ad_group", "ad_group.id", "ad_group.name", "campaign.id"),
+    "label": ("label", "label.id", "label.name", None),
+}
+
+
+def naming_reconcile(state) -> dict[str, Any]:
+    """The naming half of reconcile_ledger, for THIS server's prefix only.
+
+    * ``prefix_lost``: the ledger shows we created it, but its live name no
+      longer carries our prefix -- renamed in the UI, or created before names
+      had one (``pre_feature``). Information only; a rename puts it back.
+    * ``prefix_without_ledger``: its live name carries our prefix but the
+      ledger has no creation of it -- made elsewhere with a copied name, by
+      another checkout, or forged. Flagged, never acted on.
+    * ``other_identities``: how many live names carry each OTHER prefix.
+      Only counted: their ledgers may live on other machines.
+
+    Runs only when a prefix is configured; with none there is nothing to
+    compare names against.
+    """
+    from googleads_mcp.tools_read import identity_of
+    from googleads_reporting import naming
+    from googleads_reporting.query import Query
+
+    identity = identity_of(state)
+    if not identity.prefix:
+        return {"checked": False,
+                "reason": "no naming identity is configured in .env, so names are not checked"}
+    index = ledger.created_index()
+    lost, unrecorded, others = [], [], {}
+    try:
+        for entity_type, (resource, id_field, name_field, parent) in _NAMED.items():
+            select = (id_field, name_field) + ((parent,) if parent else ())
+            rows = state.read_client.rows(Query(
+                select=select, from_resource=resource,
+                where=(f"{resource}.status != 'REMOVED'",),
+            ))
+            for r in rows:
+                entity_id, name = str(r[id_field]), r[name_field] or ""
+                parent_id = str(r[parent]) if parent else None
+                by_ledger = ledger.created_by_us(entity_type, entity_id, campaign_id=parent_id,
+                                                 name=name, index=index)
+                by_name = naming.owns(identity, name)
+                line = {"entity_type": entity_type, "entity_id": entity_id, "name": name}
+                if by_ledger and not by_name:
+                    lost.append({**line, "pre_feature": (entity_type, entity_id)
+                                 in index["pre_feature"]})
+                elif by_name and not by_ledger:
+                    unrecorded.append(line)
+                elif not by_name and (parsed := naming.parse(name)) is not None:
+                    key = f"{parsed.owner}-{parsed.agent}-"
+                    others[key] = others.get(key, 0) + 1
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal to the reconcile
+        return {"checked": False, "reason": f"could not read names: {str(exc).splitlines()[0]}"}
+    return {"checked": True, "prefix": identity.prefix, "prefix_lost": lost,
+            "prefix_without_ledger": unrecorded, "other_identities": others}

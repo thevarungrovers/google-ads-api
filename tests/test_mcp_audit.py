@@ -89,3 +89,65 @@ def test_recent_changes_stay_inside_googles_30_day_window(monkeypatch):
     assert f">= '{(today - dt.timedelta(days=29)).isoformat()}'" in gaql
     # Tomorrow, so an account whose time zone is ahead does not lose today.
     assert f"<= '{(today + dt.timedelta(days=1)).isoformat()}'" in gaql
+
+
+# -- reconcile_ledger: the naming section ------------------------------------
+
+
+def _created(entry_id, entity_type, resource, *, identity=True, names=()):
+    from googleads_mcp import ledger
+
+    detail = {"created_names": [list(n) for n in names]}
+    if identity:
+        detail["identity"] = {"owner": "AB", "agent": "max", "source": ".env"}
+    ledger.write_intent(
+        entry_id=entry_id, tool="apply_x", customer_id="1112223333", entity_type=entity_type,
+        entity_id="new", entity_name="x", field_name="created", before="(none)",
+        after="PAUSED", projected_delta="0", detail=detail,
+    )
+    ledger.write_outcome(entry_id=entry_id, ok=True, resource_name=resource)
+
+
+def _names_state(identity, campaigns=(), ad_groups=(), labels=()):
+    from types import SimpleNamespace
+
+    from kindkit import FakeRead
+
+    read = FakeRead()
+    read.answer("FROM campaign\n", [{"campaign.id": i, "campaign.name": n} for i, n in campaigns])
+    read.answer("FROM ad_group\n", [{"ad_group.id": i, "ad_group.name": n, "campaign.id": c}
+                                    for i, n, c in ad_groups])
+    read.answer("FROM label\n", [{"label.id": i, "label.name": n} for i, n in labels])
+    return SimpleNamespace(identity=identity, read_client=read)
+
+
+def test_reconcile_reports_lost_and_unrecorded_prefixes():
+    from googleads_mcp.tools_write import naming_reconcile
+    from googleads_reporting.naming import Identity
+
+    _created("c1", "campaign", "customers/1112223333/campaigns/1")
+    _created("c2", "campaign", "customers/1112223333/campaigns/2", identity=False)
+    _created("c3", "campaign", "customers/1112223333/campaigns/3",
+             names=[("ad_group", "AB-max-General")])
+    state = _names_state(
+        Identity.from_values("AB", "max", source=".env"),
+        campaigns=[(1, "renamed in the UI"), (2, "old style"), (3, "AB-max-launch"),
+                   (4, "AB-max-forged"), (5, "CD-bot-x"), (6, "CD-bot-y"), (7, "Hand made")],
+        ad_groups=[(30, "AB-max-General", 3)],
+    )
+    report = naming_reconcile(state)
+    assert report["checked"] is True
+    lost = {r["entity_id"]: r["pre_feature"] for r in report["prefix_lost"]}
+    assert lost == {"1": False, "2": True}
+    assert [r["entity_id"] for r in report["prefix_without_ledger"]] == ["4"]
+    assert report["other_identities"] == {"CD-bot-": 2}
+
+
+def test_reconcile_skips_names_when_no_prefix_is_configured():
+    from googleads_mcp.tools_write import naming_reconcile
+    from googleads_reporting.naming import Identity
+
+    state = _names_state(Identity(), campaigns=[(1, "x")])
+    report = naming_reconcile(state)
+    assert report["checked"] is False and "no naming identity" in report["reason"]
+    assert state.read_client.queries == []
