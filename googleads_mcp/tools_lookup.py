@@ -181,6 +181,31 @@ def id_condition(field: str, raw: str | None) -> list[str]:
     return [f"{field} = {int(raw)}"] if raw else []
 
 
+def criteria_with_modifiers(client, query: Query) -> list[dict[str, Any]]:
+    """Campaign criteria as flattened dicts, each with ``_modifier`` rendered.
+
+    ``bid_modifier`` is an optional field: unset means "no modifier", while
+    0.0 means -100%, EXCLUDED. A flattened row reads 0.0 for both, so the
+    modifier is taken off the proto with the presence-aware ``modifier_of``
+    before it is flattened: None, "+20%", or "-100% (excluded)".
+    """
+    from googleads_reporting.fields import row_to_dict
+    from googleads_reporting.retry import retry_read
+    from googleads_reporting.write.targeting import modifier_of, pct_from_modifier, render_pct
+
+    def collect() -> list[dict[str, Any]]:
+        out = []
+        for proto in client.search_stream(query):
+            flat = row_to_dict(proto, query.select)
+            modifier = modifier_of(proto.campaign_criterion)
+            flat["_modifier"] = (None if modifier is None
+                                 else render_pct(pct_from_modifier(modifier)))
+            out.append(flat)
+        return out
+
+    return retry_read(collect)
+
+
 def register(mcp, state) -> None:
     client = state.read_client
 
@@ -233,12 +258,12 @@ def register(mcp, state) -> None:
         where = [f"campaign.id = {int(campaign_id)}"]
         metrics = totals("campaign", where, CAMPAIGN_IMPRESSION_SHARE)
 
-        criteria = rows(
-            CAMPAIGN_CRITERIA, "campaign_criterion",
-            [*where, "campaign_criterion.status != 'REMOVED'",
-             in_list("campaign_criterion.type",
-                     ["LOCATION", "LANGUAGE", "AD_SCHEDULE", "DEVICE", "PROXIMITY"])],
-        )
+        criteria = criteria_with_modifiers(client, Query(
+            select=CAMPAIGN_CRITERIA, from_resource="campaign_criterion",
+            where=(*where, "campaign_criterion.status != 'REMOVED'",
+                   in_list("campaign_criterion.type",
+                           ["LOCATION", "LANGUAGE", "AD_SCHEDULE", "DEVICE", "PROXIMITY"])),
+        ))
         geo_names = {}
         geo_resources = sorted({
             r["campaign_criterion.location.geo_target_constant"] for r in criteria
@@ -259,7 +284,7 @@ def register(mcp, state) -> None:
             kind = r["campaign_criterion.type"]
             base = {
                 "criterion_id": str(r["campaign_criterion.criterion_id"]),
-                "bid_modifier": r["campaign_criterion.bid_modifier"] or None,
+                "bid_modifier": r["_modifier"],
             }
             if kind == "LOCATION":
                 resource = r["campaign_criterion.location.geo_target_constant"]

@@ -54,6 +54,33 @@ def test_get_campaign_puts_the_budget_question_first(monkeypatch):
     assert set(out["metrics"]) == {"last_7_days", "last_30_days"}
 
 
+def test_get_campaign_tells_an_excluded_device_from_one_with_no_modifier(monkeypatch):
+    """bid_modifier 0.0 is "-100%", i.e. EXCLUDED -- not "no modifier"."""
+    account = ReadAccount()
+    account.answer("FROM campaign\nWHERE campaign.id = 7", [row(**{
+        "campaign.id": 7, "campaign.name": "brand", "campaign.status": "ENABLED",
+        "campaign_budget.id": 3, "campaign_budget.amount_micros": 40_000_000,
+        "customer.currency_code": "CAD",
+    })])
+
+    def device(criterion_id, name, **modifier):
+        return row(**{"campaign_criterion.criterion_id": criterion_id,
+                      "campaign_criterion.type": "DEVICE",
+                      "campaign_criterion.device.type_": name, **modifier})
+
+    account.answer("FROM campaign_criterion", [
+        device(1, "TABLET", **{"campaign_criterion.bid_modifier": 0.0}),
+        device(2, "MOBILE", **{"campaign_criterion.bid_modifier": 1.2}),
+        device(3, "DESKTOP"),
+    ])
+    tools = read_tools(tools_lookup, monkeypatch, account)
+
+    out = tools["get_campaign"](campaign_id="7")
+
+    modifiers = {d["device"]: d["bid_modifier"] for d in out["device_bid_modifiers"]}
+    assert modifiers == {"TABLET": "-100% (excluded)", "MOBILE": "+20%", "DESKTOP": None}
+
+
 def test_get_campaign_not_found_says_so(monkeypatch):
     tools = read_tools(tools_lookup, monkeypatch, ReadAccount())
     with pytest.raises(ToolError, match="^NOT_FOUND: No campaign with id 9"):
