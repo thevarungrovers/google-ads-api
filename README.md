@@ -347,8 +347,10 @@ double it. Also refused, at preview:
   prefix disguised the same way. Only the head where a prefix would sit is
   checked: `Café-Paris-promo` or `Summer – Sale` are used as given, and
   anything after a valid prefix may be any visible text;
-- control and invisible characters (a zero-width space, a line separator),
-  which would make two names that look the same differ.
+- control and invisible characters (a zero-width space, a line separator, a
+  Hangul filler, a variation selector, a blank Braille pattern) and any space
+  other than the plain one (a no-break space, an ideographic space), which
+  would make two names that look the same differ.
 
 As a last check, every preview that creates something reads the names off the
 **request it would send** -- the campaign, its budget, every nested ad group --

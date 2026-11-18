@@ -82,14 +82,31 @@ NAME_LIMITS: dict[str, tuple[int, str]] = {
 #: a zero-width space (U+200B) or a line separator (U+2028) looks identical to
 #: one without, so two "identical" names could differ, and a filter or a
 #: rename by name would miss one.
+#:
+#: Also refused: every Unicode Default_Ignorable_Code_Point (Hangul fillers,
+#: the combining grapheme joiner, variation selectors... which are Lo or Mn,
+#: not Cf, yet render as nothing), the blank Braille pattern U+2800, and every
+#: space separator (Zs) other than the plain U+0020 -- NBSP and U+3000 look
+#: like a space but are not one.
 _INVISIBLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
+_IGNORABLE_RANGES: tuple[tuple[int, int], ...] = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x2800, 0x2800), (0x3164, 0x3164), (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+)
 
 
 def _invisible(text: str) -> str | None:
-    """The first control/format/separator character in ``text``, as U+XXXX."""
+    """The first control/format/separator/ignorable character in ``text``,
+    or non-plain space, as U+XXXX."""
     for char in text:
-        if unicodedata.category(char) in _INVISIBLE:
-            return f"U+{ord(char):04X}"
+        code = ord(char)
+        category = unicodedata.category(char)
+        if (category in _INVISIBLE or (category == "Zs" and char != " ")
+                or any(low <= code <= high for low, high in _IGNORABLE_RANGES)):
+            return f"U+{code:04X}"
     return None
 
 #: The full form, ``OWNER-agent-base``. Only this form can be told apart from

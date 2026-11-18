@@ -472,3 +472,26 @@ def test_the_request_backstop_catches_a_look_alike_prefix():
     a disguised full prefix even with no identity to compare against."""
     problems = naming.final_name_problems("AB-bоt-x", "campaign")
     assert any("look-alike" in p and "AB-bot-" in p for p in problems)
+
+
+@pytest.mark.parametrize("char", [
+    "ᅟ", "ᅠ", "ㅤ", "ﾠ",          # Hangul fillers
+    "͏",                                        # combining grapheme joiner
+    "⠀",                                        # blank Braille pattern
+    *(chr(c) for c in range(0x180B, 0x1810)),        # Mongolian variation selectors
+    *(chr(c) for c in range(0xFE00, 0xFE10)),        # variation selectors
+    "\U000E0100",                                    # variation selector supplement
+    " ", "　", " ", " ", " ", " ", " ",  # Zs spaces
+])
+def test_default_ignorable_and_non_plain_spaces_are_refused(char):
+    """These render as nothing, or as a space that is not U+0020, so two names
+    that look identical would differ."""
+    with pytest.raises(NameRefused, match="invisible"):
+        stamp(BOTH, f"a{char}b", entity_type="campaign")
+    with pytest.raises(NameRefused, match="invisible"):
+        stamp(NEITHER, f"a{char}b", entity_type="label")
+    assert any("invisible" in p for p in naming.final_name_problems(f"a{char}b", "campaign"))
+
+
+def test_a_plain_space_is_still_allowed():
+    assert stamp(BOTH, "spring promo", entity_type="campaign").final == "AB-max-spring promo"
