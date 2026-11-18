@@ -176,3 +176,47 @@ def test_networks_switched_on_reverted_three_deep():
     assert Decimal(preview.projected_daily_spend_delta) == HEADROOM
     settle("search_partners=on")
     assert chain(engine, result.entry_id, settle, 3) == [0, HEADROOM, 0]
+
+
+def test_reverting_a_networks_revert_puts_the_original_change_back():
+    """The inverse row's structured before/after are swapped like its strings,
+    so undoing the undo turns Search Partners back ON rather than re-sending OFF."""
+    engine, client, kind, settle = networks_rig(False)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", search_partners=True)
+    settle("search_partners=on")
+    undo = engine.revert(result.entry_id)
+    assert client.applied[-1]["operations"][0].update.network_settings.target_search_network is False
+    row_ = ledger.find_entry(undo.entry_id)
+    assert row_["detail"]["before"]["search_partners"] is True
+    assert row_["detail"]["after"]["search_partners"] is False
+    settle(row_["after"])
+    engine.revert(undo.entry_id)
+    assert client.applied[-1]["operations"][0].update.network_settings.target_search_network is True
+
+
+def test_reverting_a_bidding_strategy_revert_puts_the_original_target_back():
+    from googleads_mcp.changes.bidding import BiddingStrategy
+
+    engine, client, _ = rig()
+
+    def settle(cpa_micros):
+        client.answer("FROM campaign\n", [row(**{
+            "campaign.id": 11, "campaign.name": "Example campaign", "campaign.status": "ENABLED",
+            "campaign.resource_name": f"customers/{CUSTOMER}/campaigns/11",
+            "campaign_budget.id": 5, "campaign_budget.amount_micros": 30_000_000,
+            "campaign.bidding_strategy_type": "MAXIMIZE_CONVERSIONS",
+            "campaign.maximize_conversions.target_cpa_micros": cpa_micros,
+        })])
+
+    settle(20_000_000)
+    kind = engine.add(BiddingStrategy())
+    _, result = preview_and_apply(engine, kind, campaign_id="11",
+                                  strategy="MAXIMIZE_CONVERSIONS", target_cpa="18.00")
+    settle(18_000_000)
+    undo = engine.revert(result.entry_id)
+    assert client.applied[-1]["operations"][0].update.maximize_conversions.target_cpa_micros \
+        == 20_000_000
+    settle(20_000_000)
+    engine.revert(undo.entry_id)
+    assert client.applied[-1]["operations"][0].update.maximize_conversions.target_cpa_micros \
+        == 18_000_000

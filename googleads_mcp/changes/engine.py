@@ -545,6 +545,7 @@ class Engine:
         previous = undone_change(entry)
         if previous is not None and previous.get("narrowing") is not None:
             detail["narrowing"] = list(previous["narrowing"])
+        detail = kind.inverse_detail(detail)
         return LedgerItem(
             entity_type=entry["entity_type"],
             entity_id=str(entry["entity_id"]),

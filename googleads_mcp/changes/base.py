@@ -408,6 +408,19 @@ class ChangeKind:
         undone = undone_change(entry)
         return undone is not None and undone.get("narrowing") is None
 
+    def inverse_detail(self, detail: dict[str, Any]) -> dict[str, Any]:
+        """The ``detail`` for a revert's own row, given the reverted row's.
+
+        A revert row swaps before and after, so any structured before/after
+        the inverse reads out of ``detail`` must swap too -- otherwise undoing
+        the undo restores the same state again and changes nothing. The
+        default swaps ``detail["before"]``/``["after"]`` (networks, bidding
+        strategy) when both are there.
+        """
+        if "before" in detail and "after" in detail:
+            return {**detail, "before": detail["after"], "after": detail["before"]}
+        return detail
+
     def reapply_checks(self, ctx, entry: dict[str, Any]) -> list[Check]:
         """The kind's own bounds on moving ``entry['after']`` back to
         ``entry['before']`` when that re-applies an earlier change (an
