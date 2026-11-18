@@ -134,11 +134,13 @@ class CreateCampaign(ChangeKind):
     ledger_keys = (("campaign", "created"),)
     weight = 3
     revertible = False
+    creates_named = ("campaign", "ad_group")
 
     def propose(
         self,
         ctx,
-        name: Annotated[str, Field(description="Campaign name; must not exist yet")],
+        name: Annotated[str, Field(description="The BASE campaign name; the server adds "
+                                   "the configured OWNER-agent- prefix. Must not exist yet")],
         channel: Annotated[Literal["SEARCH", "DISPLAY"], Field(description="Video is refused by the API")],
         daily_budget: Annotated[str, Field(description='Decimal string, e.g. "20.00"')],
         contains_eu_political_advertising: Annotated[
@@ -159,11 +161,18 @@ class CreateCampaign(ChangeKind):
         budget = parse_decimal(daily_budget, "daily_budget")
         groups = [(g if isinstance(g, NewAdGroup) else NewAdGroup.model_validate(g)).model_dump()
                   for g in ad_groups]
+        # Every name the request sends is stamped here, once: the campaign's
+        # (and so its budget's, "<name> budget") and each nested ad group's.
+        stamped = ctx.name_for_create("campaign", name)
+        names = [stamped]
         for group in groups:
+            group_name = ctx.name_for_create("ad_group", group["name"])
+            names.append(group_name)
+            group["name"] = group_name.final
             if group.get("cpc_bid"):
                 group["cpc_bid"] = str(parse_decimal(group["cpc_bid"], f"{group['name']} cpc_bid"))
         payload = {
-            "name": name.strip(), "channel": channel, "daily_budget": str(budget),
+            "name": stamped.final, "channel": channel, "daily_budget": str(budget),
             "contains_eu_political_advertising": bool(contains_eu_political_advertising),
             "ad_groups": groups,
         }
@@ -193,7 +202,9 @@ class CreateCampaign(ChangeKind):
             note=(f"{channel} campaign, budget {with_currency(budget, currency)}/day, all "
                   f"PAUSED. Ad groups: {summary}. Enabling it later projects the full "
                   "budget against the daily total."),
-            payload=payload,
+            payload=payload, names=names,
+            created_names=[("campaign", payload["name"]),
+                           *(("ad_group", g["name"]) for g in groups)],
         )
 
     def current(self, ctx, payload):
@@ -223,18 +234,22 @@ class CreateAdGroup(ChangeKind):
     ledger_keys = (("ad group", "created"),)
     weight = 3
     revertible = False
+    creates_named = ("ad_group",)
 
     def propose(
         self,
         ctx,
         campaign_id: Annotated[str, Field(description="From find_campaigns")],
-        name: Annotated[str, Field(description="Unique within the campaign")],
+        name: Annotated[str, Field(description="The BASE name; the server adds the "
+                                   "configured OWNER-agent- prefix. Unique within the campaign")],
         cpc_bid: Annotated[str | None, Field(description='Decimal string, e.g. "0.80"')] = None,
     ) -> Proposal:
         """Show what creating an empty ad group would do. Writes nothing.
         Created PAUSED; add keywords and ads, then enable it."""
         row = campaigns.find(ctx.client, campaign_id=campaign_id)
         bid = parse_decimal(cpc_bid, "cpc_bid") if cpc_bid else None
+        stamped = ctx.name_for_create("ad_group", name)
+        name = stamped.final
         existing = self._named(ctx, campaign_id, name)
         checks = [Check("name_is_free", existing == NOTHING,
                         "free in this campaign" if existing == NOTHING else existing)]
@@ -250,6 +265,7 @@ class CreateAdGroup(ChangeKind):
             note="Created PAUSED: no spend until enabled with preview_ad_group_status.",
             payload={"campaign_id": str(campaign_id), "campaign_resource": row.campaign.resource_name,
                      "name": name, "cpc_bid": None if bid is None else str(bid)},
+            names=[stamped], created_names=[("ad_group", name)],
         )
 
     @staticmethod

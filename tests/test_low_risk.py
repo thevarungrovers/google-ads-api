@@ -127,3 +127,42 @@ def test_dismissing_is_not_validated_and_cannot_be_reverted():
     assert client.sent[-1]["method"] == "dismiss_recommendation"
     with pytest.raises(ValueError, match="un-dismiss"):
         engine.revert(result.entry_id)
+
+
+@pytest.mark.parametrize("owner, agent, final", [
+    ("AB", "max", "AB-max-seasonal"), ("AB", "", "AB-seasonal"),
+    ("", "max", "max-seasonal"), ("", "", "seasonal"),
+])
+def test_a_created_label_is_stamped(owner, agent, final):
+    from googleads_reporting.naming import Identity
+
+    engine, client, _ = rig()
+    engine.ctx.state.identity = Identity.from_values(owner, agent, source=".env")
+    kind = engine.add(LowRiskChange())
+    preview, _ = preview_and_apply(engine, kind, resource="label", id="", field="create",
+                                   value="seasonal")
+    assert preview.after == final and preview.naming["final"] == final
+    assert client.applied[-1]["operations"][0].create.name == final
+
+
+def test_the_label_limit_counts_the_prefix():
+    from googleads_reporting.naming import Identity
+
+    engine, client, _ = rig()
+    engine.ctx.state.identity = Identity.from_values("AB", "max", source=".env")
+    kind = engine.add(LowRiskChange())
+    fits = engine.preview(kind, {"resource": "label", "id": "", "field": "create",
+                                 "value": "x" * 73})
+    assert not fits.blocked, fits.checks
+    over = engine.preview(kind, {"resource": "label", "id": "", "field": "create",
+                                 "value": "x" * 74})
+    assert failed(over, "name_length")
+
+
+def test_a_label_name_already_taken_blocks():
+    engine, client, _ = rig()
+    client.answer('label.name = "seasonal"', [row(**{"label.id": 4})])
+    kind = engine.add(LowRiskChange())
+    preview = engine.preview(kind, {"resource": "label", "id": "", "field": "create",
+                                    "value": "seasonal"})
+    assert failed(preview, "name_is_free")

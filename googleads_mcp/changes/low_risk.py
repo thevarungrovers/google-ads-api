@@ -29,6 +29,7 @@ from pydantic import Field
 from googleads_mcp.changes.base import APPLY_REVERSIBLE, NOTHING, ChangeKind, LedgerItem, Proposal
 from googleads_mcp.changes.common import one
 from googleads_mcp.guardrails import Check
+from googleads_reporting.query import quote_double
 from googleads_reporting.write import lowrisk
 
 #: (resource, field) -> what it does. THE allowlist. Edit with care: see the
@@ -90,6 +91,12 @@ def _url_value(ctx, resource: str, entity_id: str, field: str) -> str:
     return getattr(getattr(found, resource), field) or EMPTY
 
 
+def _label_named(ctx, name: str) -> str:
+    found = one(ctx, ("label.id",), "label",
+                [f"label.name = {quote_double(name)}", "label.status != 'REMOVED'"])
+    return NOTHING if found is None else f"exists as label {found.label.id}"
+
+
 def _check_url(field: str, value: str) -> None:
     if value == "":
         return
@@ -109,6 +116,8 @@ class LowRiskChange(ChangeKind):
     apply_title = "Apply a low-risk edit"
     apply_annotations = APPLY_REVERSIBLE
     ledger_keys = tuple(ALLOWLIST)
+    #: label create: the label name is stamped like any other created name.
+    creates_named = ("label",)
 
     def propose(
         self,
@@ -147,9 +156,16 @@ class LowRiskChange(ChangeKind):
         payload: dict[str, Any] = {"resource": resource, "field": field, "value": value}
         checks: list[Check] = []
         campaign_id = None
+        names, created = [], []
         if resource == "label":
             if not value.strip():
                 raise ValueError("value must be the new label's name.")
+            stamped = ctx.name_for_create("label", value)
+            value = payload["value"] = stamped.final
+            names, created = [stamped], [("label", value)]
+            existing = _label_named(ctx, value)
+            checks.append(Check("name_is_free", existing == NOTHING,
+                                "no label has this name" if existing == NOTHING else existing))
             before, after, entity_id, name = NOTHING, value, f"new:{value}", f"label {value!r}"
         elif resource == "recommendation":
             entity_id = str(id).strip()
@@ -185,14 +201,15 @@ class LowRiskChange(ChangeKind):
             items=[LedgerItem(resource, entity_id, name, field, before, after,
                               {"label_id": payload.get("label_id")})],
             note=f"Low-risk edit: {ALLOWLIST[key]}. Cannot move money or change targeting.",
+            names=names, created_names=created,
         )
 
     def validates(self, payload):
         return payload["resource"] != "recommendation"
 
-    def _now(self, ctx, resource, field, entity_id, label_id=None) -> str:
+    def _now(self, ctx, resource, field, entity_id, label_id=None, value=None) -> str:
         if resource == "label":
-            return NOTHING
+            return NOTHING if value is None else _label_named(ctx, value)
         if resource == "recommendation":
             return "active"
         if field in ("attach_label", "detach_label"):
@@ -201,7 +218,8 @@ class LowRiskChange(ChangeKind):
 
     def current(self, ctx, payload):
         return self._now(ctx, payload["resource"], payload["field"],
-                         payload.get("entity_id"), payload.get("label_id"))
+                         payload.get("entity_id"), payload.get("label_id"),
+                         payload["value"] if payload["resource"] == "label" else None)
 
     def _plan(self, ctx, resource, field, entity_id, value, label_id=None, recommendation_id=None):
         if resource == "label":
