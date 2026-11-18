@@ -13,31 +13,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from googleads_mcp.errors import refusals_reach_the_caller
 from googleads_reporting.client import ReadOnlyGoogleAdsClient
 from googleads_reporting.export import summarise, to_dataframe
 from googleads_reporting.query import Query, between, contains, during, last_n_days
 from googleads_reporting.reports import REGISTRY, get_report, report_names
-
-def refusals_reach_the_caller(fn):
-    """Re-raise a deliberate refusal as ToolError so its message survives.
-
-    The MCP runtime carries a ToolError's text through to the caller but
-    replaces every other exception with a bare "Error executing tool <name>".
-    An unknown report name should say which names exist, not nothing.
-    """
-    import functools
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except ToolError:
-            raise
-        except (ValueError, LookupError) as exc:
-            raise ToolError(str(exc)) from exc
-
-    return wrapper
-
 
 # ALL FOUR HINTS, ALWAYS, ON EVERY TOOL. A hint left unset is published as
 # absent, and a client that cannot see one falls back on the spec's default --

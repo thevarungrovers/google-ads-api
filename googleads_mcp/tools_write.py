@@ -40,10 +40,8 @@ apply -> revert sequence for all of them. This module only wires them up.
 
 from __future__ import annotations
 
-import functools
 from typing import Annotated
 
-from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from googleads_mcp.changes import all_kinds
@@ -57,43 +55,16 @@ from googleads_mcp.changes.base import (  # noqa: F401 - re-exported
 )
 from googleads_mcp.changes.context import WriteContext
 from googleads_mcp.changes.engine import Engine, register_pair
-from googleads_mcp.guardrails import WritesDisabled, read_only_mode
-from googleads_mcp.previews import ApplyResult, PreviewExpired, PreviewStale
+from googleads_mcp.errors import refusals_reach_the_caller
+from googleads_mcp.guardrails import read_only_mode
+from googleads_mcp.previews import ApplyResult
 from googleads_reporting.write import MutatingGoogleAdsClient, adgroups, budgets, campaigns  # noqa: F401
-from googleads_reporting.write.client import MutationError
+from googleads_reporting.write.client import MutationError  # noqa: F401 - tests raise it
 from googleads_reporting.write.plan import execute
 
-#: Exceptions that mean "the tool refused on purpose", as opposed to "the tool
-#: crashed". The distinction is load-bearing: the MCP runtime carries a
-#: ToolError's message through to the caller as
-#: "Error executing tool <name>: <message>", but replaces every other
-#: exception with a bare "Error executing tool <name>" and keeps the detail
-#: server-side. Raising ValueError for a guardrail refusal therefore tells the
-#: agent nothing at all -- it cannot see which bound it broke, so it cannot
-#: propose something smaller, and will most likely try the same call again.
-DELIBERATE_REFUSALS = (
-    ValueError,
-    LookupError,
-    PreviewExpired,
-    PreviewStale,
-    MutationError,
-    WritesDisabled,
-)
-
-
-def refusals_reach_the_caller(fn):
-    """Re-raise a deliberate refusal as ToolError so its message survives."""
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except ToolError:
-            raise
-        except DELIBERATE_REFUSALS as exc:
-            raise ToolError(str(exc)) from exc
-
-    return wrapper
+# Every tool here is wrapped in googleads_mcp.errors.refusals_reach_the_caller:
+# the MCP runtime drops the message of any exception that is not a ToolError,
+# and an agent that cannot read WHICH bound it broke will retry the same call.
 
 
 def register(mcp, state) -> Engine:
