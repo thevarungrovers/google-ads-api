@@ -379,7 +379,18 @@ def _base_of(identity: Identity, requested: str) -> tuple[str, bool]:
     if requested.startswith(identity.prefix) and not requested[len(identity.prefix):].strip():
         raise NameRefused("The name has nothing after the prefix.")
     if owns(identity, requested):
-        return requested[len(identity.prefix):], True
+        base = requested[len(identity.prefix):]
+        # Our prefix is stripped ONCE. What is left must be a plain base:
+        # "AB-max-AB-max-x" would otherwise be sent doubled, and
+        # "AB-max-CD-bot-x" would carry a second identity inside ours.
+        again = parse(base)
+        if base.startswith(identity.prefix) or again is not None:
+            shown = identity.prefix if again is None else f"{again.owner}-{again.agent}-"
+            raise NameRefused(
+                f"after this checkout's {identity.prefix} prefix the name starts with "
+                f"{shown} -- a prefix again. Pass the base name only, once."
+            )
+        return base, True
     parsed = foreign(identity, requested)
     if parsed is not None:
         _refuse_foreign(parsed)

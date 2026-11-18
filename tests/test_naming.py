@@ -357,3 +357,28 @@ def test_renaming_to_another_identity_is_refused_with_no_identity():
 def test_the_cli_with_no_initials_refuses_another_identity_too():
     with pytest.raises(NameRefused, match="CD-bot-"):
         naming.stamp_for_cli(NEITHER.cli(), "CD-bot-x", entity_type="campaign")
+
+
+# -- a doubled prefix ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("identity, requested", [
+    (BOTH, "AB-max-AB-max-x"),
+    (BOTH, "AB-max-CD-bot-x"),
+    (BOTH, "AB-max-AB-cli-x"),
+    (OWNER_ONLY, "AB-AB-x"),
+    (OWNER_ONLY, "AB-CD-bot-x"),
+    (AGENT_ONLY, "max-max-x"),
+    (AGENT_ONLY, "max-CD-bot-x"),
+])
+def test_a_base_still_carrying_a_prefix_after_ours_is_stripped_is_refused(identity, requested):
+    """Stripping our prefix once must leave a plain base: "AB-max-AB-max-x"
+    would otherwise be sent as is, doubled."""
+    with pytest.raises(NameRefused, match="prefix"):
+        stamp(identity, requested, entity_type="campaign")
+
+
+def test_a_rename_to_a_doubled_prefix_is_refused():
+    with pytest.raises(NameRefused, match="prefix"):
+        rename(BOTH, "AB-max-old", "AB-max-AB-max-new", entity_type="campaign",
+               ledger_owned=False)
