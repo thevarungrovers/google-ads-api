@@ -12,6 +12,7 @@ import pytest
 
 from googleads_reporting.write.builder import build
 from googleads_reporting.write.campaigns import plan_create
+from googleads_reporting.write.client import MutationError
 from googleads_reporting.write.spec import AdGroupSpec, CampaignSpec, ResponsiveSearchAdSpec
 from kindkit import FakeWriteClient
 
@@ -46,7 +47,9 @@ def test_plan_create_without_dates_leaves_them_unset():
 
 
 def test_a_malformed_date_is_refused_with_the_format():
-    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+    # A MutationError, which manage.py turns into a clean "error: ..." line; a
+    # bare ValueError escaped it as a traceback.
+    with pytest.raises(MutationError, match="YYYY-MM-DD"):
         plan_create(
             FakeWriteClient(),
             name="Example Co -- Search",
@@ -78,3 +81,31 @@ def test_builder_sets_the_same_fields():
     ]
     assert campaigns[0].start_date_time == "2026-12-01 00:00:00"
     assert campaigns[0].end_date_time == "2026-12-31 23:59:59"
+
+
+def _spec(**dates):
+    return CampaignSpec(
+        name="Example Co -- Search",
+        channel="SEARCH",
+        budget_amount=10.0,
+        ad_groups=[AdGroupSpec(
+            name="Example ad group",
+            ads=[ResponsiveSearchAdSpec(
+                headlines=["a", "b", "c"], descriptions=["x", "y"],
+                final_url="https://example.com",
+            )],
+        )],
+        **dates,
+    )
+
+
+def test_the_built_plan_shows_the_run_dates_the_human_confirms():
+    built = build(FakeWriteClient(), _spec(start_date="2026-12-01", end_date="2026-12-31"))
+    shown = {c.field: c.after for c in built.plan.changes}
+    assert shown.get("start_date") == "2026-12-01"
+    assert shown.get("end_date") == "2026-12-31"
+
+
+def test_a_malformed_date_in_a_whole_build_is_a_mutation_error():
+    with pytest.raises(MutationError, match="end_date must be YYYY-MM-DD"):
+        build(FakeWriteClient(), _spec(end_date="31/12/2026"))

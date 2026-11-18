@@ -127,6 +127,9 @@ def build(
             FieldChange("name", None, spec.name),
             FieldChange("channel", None, spec.channel),
             FieldChange("status", None, spec.status),
+            # The run dates, when set, are part of what the human approves.
+            *([FieldChange("start_date", None, spec.start_date)] if spec.start_date else []),
+            *([FieldChange("end_date", None, spec.end_date)] if spec.end_date else []),
             # Always shown: this is a legal declaration, and one made silently
             # on someone's behalf is not a declaration.
             FieldChange(

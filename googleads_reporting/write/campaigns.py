@@ -201,7 +201,10 @@ def _iso_day(value: str, name: str) -> str:
     try:
         return dt.date.fromisoformat(value.strip()).isoformat()
     except ValueError as exc:
-        raise ValueError(f"{name} must be YYYY-MM-DD, got {value!r}.") from exc
+        # MutationError, not ValueError: every caller (manage.py included)
+        # turns a MutationError into a clean refusal, and a bare ValueError
+        # escaped as a traceback.
+        raise MutationError(f"{name} must be YYYY-MM-DD, got {value!r}.") from exc
 
 
 def plan_create(
