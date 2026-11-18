@@ -86,7 +86,7 @@ def register(mcp, state) -> None:
         impact. Treat them as suggestions from a party that is paid by the
         click: check each against run_report before acting.
 
-        Act on one with preview_apply_recommendation (only types that map onto
+        Act on one with preview_recommendation (only types that map onto
         a guarded change are accepted) or set it aside with
         preview_low_risk_change(resource="recommendation", field="dismiss").
         """

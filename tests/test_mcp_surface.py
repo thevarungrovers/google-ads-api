@@ -73,6 +73,8 @@ PREVIEW_TOOLS = frozenset({
     "preview_create_ad_group",
     "preview_rename_campaign",
     "preview_rename_ad_group",
+    # recommendations
+    "preview_recommendation",
 })
 
 APPLY_TOOLS = frozenset({
@@ -110,6 +112,8 @@ APPLY_TOOLS = frozenset({
     "apply_create_ad_group",
     "apply_rename_campaign",
     "apply_rename_ad_group",
+    # recommendations
+    "apply_recommendation",
     "revert_change",
 })
 

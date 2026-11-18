@@ -30,6 +30,7 @@ def all_kinds() -> list[ChangeKind]:
         RenameAdGroup,
         RenameCampaign,
     )
+    from googleads_mcp.changes.recommendations import ApplyRecommendation
     from googleads_mcp.changes.targeting import (
         AdSchedule,
         AudienceTargeting,
@@ -83,6 +84,8 @@ def all_kinds() -> list[ChangeKind]:
         CreateAdGroup(),
         RenameCampaign(),
         RenameAdGroup(),
+        # Google's recommendations, routed through the kinds above
+        ApplyRecommendation(),
     ]
 
 
