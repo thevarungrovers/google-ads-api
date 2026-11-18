@@ -164,3 +164,25 @@ def test_reconcile_under_initials_only_does_not_file_other_identities_as_ours():
     report = naming_reconcile(state)
     assert [r["entity_id"] for r in report["prefix_without_ledger"]] == ["1"]
     assert report["other_identities"] == {"AB-bot-": 1, "AB-cli-": 1}
+
+
+def test_a_label_created_through_the_low_risk_kind_counts_as_ledger_created():
+    """Label rows are written with field "create" (the low-risk kind's own
+    field name), not "created": the index must read both."""
+    from googleads_mcp import ledger
+    from googleads_mcp.tools_write import naming_reconcile
+    from googleads_reporting.naming import Identity
+
+    ledger.write_intent(
+        entry_id="l1", tool="apply_low_risk_change", customer_id="1112223333",
+        entity_type="label", entity_id="new:AB-max-promo", entity_name="label 'AB-max-promo'",
+        field_name="create", before="(none)", after="AB-max-promo", projected_delta="0",
+        detail={"label_id": None, "created_names": [["label", "AB-max-promo"]],
+                "identity": {"owner": "AB", "agent": "max", "source": ".env"}},
+    )
+    ledger.write_outcome(entry_id="l1", ok=True, resource_name="customers/1112223333/labels/9")
+    assert "9" in ledger.created_index()["label"]
+    state = _names_state(Identity.from_values("AB", "max", source=".env"),
+                         labels=[(9, "AB-max-promo")])
+    report = naming_reconcile(state)
+    assert report["prefix_without_ledger"] == [] and report["prefix_lost"] == []

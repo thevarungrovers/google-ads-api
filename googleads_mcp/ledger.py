@@ -126,7 +126,8 @@ def created_index() -> dict[str, set]:
         detail = entry.get("detail") or {}
         kind = by_type.get(entry.get("entity_type") or "")
         resource = entry.get("resource_name") or ""
-        if entry.get("field") == "created" and resource:
+        # Label rows say "create" (the low-risk kind's field), every other kind "created".
+        if entry.get("field") in ("created", "create") and resource:
             collection, _, entity_id = resource.rpartition("/")
             for name, plural in _COLLECTION.items():
                 if collection.endswith("/" + plural):
