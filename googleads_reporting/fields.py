@@ -177,7 +177,11 @@ def coerce(value: Any) -> Any:
     if isinstance(value, (list, tuple)) or (
         hasattr(value, "__iter__") and not isinstance(value, (bytes, str))
     ):
-        return [coerce(item) for item in value]
+        # _coerce_scalar per item, not coerce: a repeated ENUM field holds
+        # IntEnums, which coerce's int fast path would hand back as enum
+        # objects -- serialised as bare numbers, so primary_status_reasons
+        # came out as [11] instead of ["BUDGET_CONSTRAINED"].
+        return [_coerce_scalar(item) for item in value]
     return value
 
 

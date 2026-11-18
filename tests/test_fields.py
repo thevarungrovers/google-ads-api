@@ -252,3 +252,13 @@ def test_unknown_money_fields_stays_quiet_on_ruled_and_plain_fields():
             "segments.date",
         ]
     ) == ()
+
+
+def test_a_repeated_enum_comes_back_as_names_not_numbers():
+    """primary_status_reasons came out as [11] before this."""
+    from kindkit import RAW, row
+
+    reasons = RAW.get_type("CampaignPrimaryStatusReasonEnum").CampaignPrimaryStatusReason
+    message = row()
+    message.campaign.primary_status_reasons.append(reasons.BUDGET_CONSTRAINED)
+    assert get_field(message, "campaign.primary_status_reasons") == ["BUDGET_CONSTRAINED"]
