@@ -232,21 +232,25 @@ def test_the_revert_row_of_a_narrowing_does_not_count_as_narrowing_again():
     assert "narrowing" not in (ledger.find_entry(undo.entry_id).get("detail") or {})
 
 
-def legacy_negative_row(entry_id="legacy1", *, tool="apply_add_negative_keywords", detail=None):
-    """A negative-keyword row as written before the engine recorded ``narrowing``."""
+def legacy_negative_row(entry_id="legacy1", *, tool="apply_add_negative_keywords", detail=None,
+                        entity_type="negative keyword", entity_id="campaign:11:PHRASE:free",
+                        resource_name="customers/1112223333/campaignCriteria/11~1",
+                        after="present"):
+    """A negative row exactly as written before the engine recorded ``narrowing``
+    -- or ``scope_campaigns``, which came later still: only the kind's own
+    detail, so the campaign has to be read off ``level`` / ``target_id``."""
     from googleads_mcp import ledger
     from kindkit import CUSTOMER
 
     ledger.write_intent(
         entry_id=entry_id, tool=tool, customer_id=CUSTOMER,
-        entity_type="negative keyword", entity_id="11:free", entity_name="free",
-        field_name="created", before="(none)", after="present", projected_delta="0",
+        entity_type=entity_type, entity_id=entity_id, entity_name="-[PHRASE] free",
+        field_name="created", before="(none)", after=after, projected_delta="0",
         detail=detail if detail is not None else {
             "level": "campaign", "target_id": "11", "text": "free", "match_type": "PHRASE",
-            "resource": "campaign_criterion", "scope_campaigns": ["11"]},
+            "resource": "campaign_criterion"},
     )
-    ledger.write_outcome(entry_id=entry_id, ok=True,
-                         resource_name="customers/1112223333/campaignCriteria/11~1")
+    ledger.write_outcome(entry_id=entry_id, ok=True, resource_name=resource_name)
 
 
 def test_a_legacy_negative_row_without_the_narrowing_key_still_projects_headroom():
@@ -267,3 +271,54 @@ def test_a_legacy_revert_row_of_a_negative_does_not_fall_back_to_narrowing():
     from googleads_mcp import ledger
 
     assert kind.narrowed_for(ledger.find_entry("legacy2")) is None
+
+
+def test_a_legacy_ad_group_negative_row_is_refused_not_reverted_for_free():
+    """An ad-group negative's row names the AD GROUP, not its campaign, so the
+    campaign it narrowed cannot be read off the row: refuse, never cost 0."""
+    import pytest
+
+    engine, client, _ = rig()
+    campaign(client)
+    engine.add(AddNegativeKeywords())
+    legacy_negative_row("legacy3", entity_id="ad_group:22:PHRASE:free", detail={
+        "level": "ad_group", "target_id": "22", "text": "free", "match_type": "PHRASE",
+        "resource": "ad_group_criterion"},
+        resource_name="customers/1112223333/adGroupCriteria/22~1")
+    created_present(client, "ad_group_criterion")
+    sent = len(client.applied)
+    with pytest.raises(ValueError, match="cannot tell which campaign"):
+        engine.revert("legacy3")
+    assert len(client.applied) == sent
+
+
+def test_a_legacy_shared_negative_row_is_refused():
+    """Which campaigns the list was attached to THEN is not on the row."""
+    import pytest
+
+    engine, client, _ = rig()
+    campaign(client)
+    shared_list(client, attached=("11",))
+    engine.add(AddToSharedNegativeList())
+    legacy_negative_row("legacy4", tool="apply_add_to_shared_negative_list",
+                        entity_type="shared negative keyword", entity_id="8:PHRASE:free",
+                        detail={"shared_set_id": "8", "text": "free", "match_type": "PHRASE"},
+                        resource_name="customers/1112223333/sharedCriteria/8~1")
+    client.answer("shared_criterion.resource_name =", [row(**{
+        "shared_criterion.resource_name": "x"})])
+    sent = len(client.applied)
+    with pytest.raises(ValueError, match="cannot tell which campaign"):
+        engine.revert("legacy4")
+    assert len(client.applied) == sent
+
+
+def test_a_legacy_linked_list_row_reads_its_campaign_off_the_entity_id():
+    engine, client, _ = rig()
+    campaign(client)
+    engine.add(LinkSharedNegativeList())
+    legacy_negative_row("legacy5", tool="apply_link_shared_negative_list",
+                        entity_type="campaign shared set", entity_id="11~8", detail={},
+                        after="ENABLED",
+                        resource_name="customers/1112223333/campaignSharedSets/11~8")
+    created_present(client, "campaign_shared_set")
+    assert reverted(engine, "legacy5") == HEADROOM

@@ -409,7 +409,23 @@ class ChangeKind:
         detail = entry.get("detail") or {}
         if "undoes" in detail or entry.get("tool") == "revert_change":
             return None
-        return entry_campaigns(entry) or []
+        campaigns = self.legacy_narrowed(entry)
+        if not campaigns:
+            # Never "narrowed nothing, so free": undoing it reopens delivery
+            # somewhere, and a revert that cannot say where is not costed.
+            raise ValueError(
+                f"Entry {entry.get('entry_id')} predates the ledger recording which "
+                "campaigns a negative narrowed, and the row alone cannot tell which "
+                "campaign it narrowed, so undoing it cannot be costed. Not reverting; "
+                "remove it in the Google Ads UI if it has to go."
+            )
+        return campaigns
+
+    def legacy_narrowed(self, entry: dict[str, Any]) -> list[str] | None:
+        """For a row of an always-narrowing kind written before ``narrowing``
+        (and ``scope_campaigns``) were recorded: the campaigns it narrowed,
+        read off what the kind itself stored, or None when they cannot be."""
+        return entry_campaigns(entry)
 
     def reapplies(self, entry: dict[str, Any]) -> bool:
         """Whether reverting ``entry`` re-applies a change it undid.

@@ -449,6 +449,14 @@ class AddNegativeKeywords(CreatesRemovable):
     def resource_for(self, entry: dict[str, Any]) -> str:
         return (entry.get("detail") or {}).get("resource", "campaign_criterion")
 
+    def legacy_narrowed(self, entry: dict[str, Any]) -> list[str] | None:
+        # A campaign-level negative's target IS its campaign. An ad-group one
+        # names only the ad group, so its campaign is unknown from the row.
+        detail = entry.get("detail") or {}
+        if detail.get("level") == "campaign" and str(detail.get("target_id") or "").isdigit():
+            return [str(detail["target_id"])]
+        return super().legacy_narrowed(entry)
+
 
 def _shared_set(ctx, shared_set_id: str):
     found = one(ctx, ("shared_set.id", "shared_set.name", "shared_set.type",
@@ -581,3 +589,8 @@ class LinkSharedNegativeList(CreatesRemovable):
         return criteria.plan_link_shared_set(
             ctx.client, campaign_id=payload["campaign_id"], shared_set_id=payload["shared_set_id"],
         )
+
+    def legacy_narrowed(self, entry: dict[str, Any]) -> list[str] | None:
+        # The row's entity_id is "<campaign_id>~<shared_set_id>".
+        head = str(entry.get("entity_id") or "").split("~", 1)[0]
+        return [head] if head.isdigit() else super().legacy_narrowed(entry)
