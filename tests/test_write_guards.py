@@ -263,7 +263,16 @@ def test_the_mutate_allowlist_is_exactly_what_was_chosen():
         "CampaignCriterionService", "SharedCriterionService", "CampaignSharedSetService",
         # ads and assets
         "CampaignAssetService", "AdGroupAssetService",
+        # the low-risk edits
+        "LabelService", "CampaignLabelService", "AdGroupLabelService",
+        "AdGroupAdLabelService", "AdGroupCriterionLabelService", "RecommendationService",
     }
+
+
+def test_google_one_click_apply_is_not_reachable():
+    """apply_recommendation would skip every bound; only dismiss is mapped."""
+    with pytest.raises(MutationError, match="Unsupported"):
+        _request_type_for("apply_recommendation")
 
 
 def test_an_atomic_request_cannot_smuggle_in_an_unlisted_service(client):

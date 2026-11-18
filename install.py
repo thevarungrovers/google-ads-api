@@ -108,6 +108,7 @@ SAFE_TOOLS = (
     "preview_rename_campaign",
     "preview_rename_ad_group",
     "preview_recommendation",
+    "preview_low_risk_change",
 )
 
 #: The tools that move real money. Never allowlisted, by any answer to anything.
@@ -143,6 +144,7 @@ WRITE_TOOLS = (
     "apply_rename_campaign",
     "apply_rename_ad_group",
     "apply_recommendation",
+    "apply_low_risk_change",
 )
 
 READ_ONLY_ENV = "GOOGLE_ADS_MCP_READ_ONLY"

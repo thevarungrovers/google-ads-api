@@ -235,6 +235,14 @@ class ChangeKind:
     #: the apply (none so far).
     validate_in_preview: bool = True
 
+    def validates(self, payload: dict[str, Any]) -> bool:
+        """Whether THIS change can be checked with validate_only.
+
+        Per payload, because one general kind can cover a method Google gives
+        no validate_only for (dismissing a recommendation).
+        """
+        return self.validate_in_preview
+
     def propose(self, ctx, **kwargs) -> Proposal:  # pragma: no cover - abstract
         raise NotImplementedError
 

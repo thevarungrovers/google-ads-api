@@ -147,7 +147,7 @@ class Engine:
         # Google's own verdict, without changing anything. Only once our own
         # checks pass: a blocked preview will never be applied, so asking
         # Google about it costs a request and tells nobody anything.
-        if kind.validate_in_preview and not any_failed(checks):
+        if kind.validates(payload) and not any_failed(checks):
             checks.append(ctx.validate(lambda: kind.build(ctx, payload)))
 
         blocked = any_failed(checks)

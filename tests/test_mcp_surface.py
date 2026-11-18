@@ -75,6 +75,8 @@ PREVIEW_TOOLS = frozenset({
     "preview_rename_ad_group",
     # recommendations
     "preview_recommendation",
+    # the general low-risk tool
+    "preview_low_risk_change",
 })
 
 APPLY_TOOLS = frozenset({
@@ -114,6 +116,8 @@ APPLY_TOOLS = frozenset({
     "apply_rename_ad_group",
     # recommendations
     "apply_recommendation",
+    # the general low-risk tool
+    "apply_low_risk_change",
     "revert_change",
 })
 
@@ -221,6 +225,7 @@ NON_DESTRUCTIVE_APPLIES = frozenset({
     "revert_change",
     "apply_rename_campaign",
     "apply_rename_ad_group",
+    "apply_low_risk_change",
 })
 
 

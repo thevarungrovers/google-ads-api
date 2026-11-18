@@ -42,6 +42,16 @@ ALLOWED_MUTATE_SERVICES = frozenset(
         # structured snippet asset to a campaign or ad group.
         "CampaignAssetService",
         "AdGroupAssetService",
+        # The low-risk edits (Phase 4): labels and label attachments, and
+        # dismissing a recommendation. RecommendationService is here for
+        # dismiss_recommendation ONLY -- its apply_recommendation would skip
+        # every bound, and _REQUEST_TYPES does not map it.
+        "LabelService",
+        "CampaignLabelService",
+        "AdGroupLabelService",
+        "AdGroupAdLabelService",
+        "AdGroupCriterionLabelService",
+        "RecommendationService",
         # Reads are allowed here too: a mutation needs to fetch current state to
         # show a before/after diff. GoogleAdsService also carries the ATOMIC
         # multi-entity mutate used to build a whole campaign in one request --
@@ -214,10 +224,15 @@ class MutatingGoogleAdsClient:
         )
 
         request = self._raw.get_type(_request_type_for(method))
+        if method in NO_VALIDATE_ONLY and validate_only:
+            self._audit.outcome(correlation_id, ok=True, resource_names=[],
+                                error="not sent: this method has no validate_only")
+            return MutationResult(validated_only=True, resource_names=[])
         request.customer_id = target
         request.operations.extend(operations)
         request.partial_failure = partial_failure
-        request.validate_only = validate_only
+        if method not in NO_VALIDATE_ONLY:
+            request.validate_only = validate_only
 
         try:
             with logdb.record_api_call(
@@ -373,7 +388,18 @@ _REQUEST_TYPES = {
     "mutate_campaign_shared_sets": "MutateCampaignSharedSetsRequest",
     "mutate_campaign_assets": "MutateCampaignAssetsRequest",
     "mutate_ad_group_assets": "MutateAdGroupAssetsRequest",
+    "mutate_labels": "MutateLabelsRequest",
+    "mutate_campaign_labels": "MutateCampaignLabelsRequest",
+    "mutate_ad_group_labels": "MutateAdGroupLabelsRequest",
+    "mutate_ad_group_ad_labels": "MutateAdGroupAdLabelsRequest",
+    "mutate_ad_group_criterion_labels": "MutateAdGroupCriterionLabelsRequest",
+    "dismiss_recommendation": "DismissRecommendationRequest",
 }
+
+#: Methods whose request has no validate_only field. With apply=False they are
+#: not sent at all -- there is no way to ask Google "would this work" -- and
+#: the result says so rather than pretending to a server-side check.
+NO_VALIDATE_ONLY = frozenset({"dismiss_recommendation"})
 
 
 def _service_of_mutate_operation(operation: Any) -> str:
