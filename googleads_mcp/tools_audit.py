@@ -158,8 +158,12 @@ def register(mcp, state) -> None:
         clients -- everything list_my_changes cannot see. Read it before
         reverting anything: a person may have adjusted the same entity since.
         """
+        # Both bounds: Google's change_event examples always give a closed
+        # range, and an open-ended one has been refused as missing a filter.
         start = (dt.date.today() - dt.timedelta(days=days)).isoformat()
-        where = [f"change_event.change_date_time >= '{start}'"]
+        end = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+        where = [f"change_event.change_date_time >= '{start}'",
+                 f"change_event.change_date_time <= '{end}'"]
         if campaign_id:
             where.append(f"campaign.id = {int(campaign_id)}")
         found = client.rows(Query(

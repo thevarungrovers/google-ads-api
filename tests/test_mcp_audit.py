@@ -55,6 +55,7 @@ def test_recent_changes_always_sends_the_limit_change_event_requires(monkeypatch
     gaql = account.queries[-1]
     assert "FROM change_event" in gaql and "LIMIT 200" in gaql
     assert "change_event.change_date_time >=" in gaql
+    assert "change_event.change_date_time <=" in gaql
 
 
 def test_recommendations_carry_their_id_and_budget_numbers(monkeypatch):
