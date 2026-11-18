@@ -38,6 +38,10 @@ ALLOWED_MUTATE_SERVICES = frozenset(
         "CampaignCriterionService",
         "SharedCriterionService",
         "CampaignSharedSetService",
+        # Ads and assets (subgroup D): linking a sitelink / callout /
+        # structured snippet asset to a campaign or ad group.
+        "CampaignAssetService",
+        "AdGroupAssetService",
         # Reads are allowed here too: a mutation needs to fetch current state to
         # show a before/after diff. GoogleAdsService also carries the ATOMIC
         # multi-entity mutate used to build a whole campaign in one request --
@@ -283,6 +287,11 @@ class MutatingGoogleAdsClient:
         """
         if not operations:
             raise MutationError("No operations to send.")
+        # GoogleAdsService.mutate reaches EVERY service through its oneof, so
+        # without this the allowlist would stop at the door of the one request
+        # that can touch the most. Each operation's service must be allowed.
+        for operation in operations:
+            self.service(_service_of_mutate_operation(operation))
 
         target = self.resolve_customer_id(customer_id)
         service = self.service("GoogleAdsService")
@@ -362,7 +371,21 @@ _REQUEST_TYPES = {
     "mutate_campaign_criteria": "MutateCampaignCriteriaRequest",
     "mutate_shared_criteria": "MutateSharedCriteriaRequest",
     "mutate_campaign_shared_sets": "MutateCampaignSharedSetsRequest",
+    "mutate_campaign_assets": "MutateCampaignAssetsRequest",
+    "mutate_ad_group_assets": "MutateAdGroupAssetsRequest",
 }
+
+
+def _service_of_mutate_operation(operation: Any) -> str:
+    """campaign_asset_operation -> CampaignAssetService."""
+    try:
+        fields = type(operation).pb(operation).ListFields()
+    except Exception as exc:  # noqa: BLE001
+        raise MutationError(f"Not a MutateOperation: {operation!r}") from exc
+    if not fields:
+        raise MutationError("An empty MutateOperation cannot be sent.")
+    name = fields[0][0].name.removesuffix("_operation")
+    return "".join(word.capitalize() for word in name.split("_")) + "Service"
 
 
 def _request_type_for(method: str) -> str:

@@ -97,6 +97,12 @@ SAFE_TOOLS = (
     "preview_location_bid_modifier",
     "preview_audience_targeting",
     "preview_campaign_networks",
+    "preview_create_responsive_search_ad",
+    "preview_ad_status",
+    "preview_replace_responsive_search_ad",
+    "preview_add_sitelinks",
+    "preview_add_callouts",
+    "preview_add_structured_snippets",
 )
 
 #: The tools that move real money. Never allowlisted, by any answer to anything.
@@ -121,6 +127,12 @@ WRITE_TOOLS = (
     "apply_location_bid_modifier",
     "apply_audience_targeting",
     "apply_campaign_networks",
+    "apply_create_responsive_search_ad",
+    "apply_ad_status",
+    "apply_replace_responsive_search_ad",
+    "apply_add_sitelinks",
+    "apply_add_callouts",
+    "apply_add_structured_snippets",
 )
 
 READ_ONLY_ENV = "GOOGLE_ADS_MCP_READ_ONLY"

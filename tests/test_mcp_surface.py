@@ -61,6 +61,13 @@ PREVIEW_TOOLS = frozenset({
     "preview_location_bid_modifier",
     "preview_audience_targeting",
     "preview_campaign_networks",
+    # ads and assets
+    "preview_create_responsive_search_ad",
+    "preview_ad_status",
+    "preview_replace_responsive_search_ad",
+    "preview_add_sitelinks",
+    "preview_add_callouts",
+    "preview_add_structured_snippets",
 })
 
 APPLY_TOOLS = frozenset({
@@ -86,6 +93,13 @@ APPLY_TOOLS = frozenset({
     "apply_location_bid_modifier",
     "apply_audience_targeting",
     "apply_campaign_networks",
+    # ads and assets
+    "apply_create_responsive_search_ad",
+    "apply_ad_status",
+    "apply_replace_responsive_search_ad",
+    "apply_add_sitelinks",
+    "apply_add_callouts",
+    "apply_add_structured_snippets",
     "revert_change",
 })
 
@@ -321,10 +335,32 @@ def test_no_tool_can_remove_an_entity(tools):
         ), name
 
 
-def test_no_tool_creates_a_campaign(tools):
-    """Creation carries media and a legal declaration a human answers for."""
+#: Every tool allowed to CREATE something, by name. Creation is allowed now
+#: (agent-parity), but only through these, each created PAUSED where Google
+#: has a status, and each costing 3 applies against the caps.
+CREATION_TOOLS = frozenset({
+    "preview_create_responsive_search_ad",
+    "apply_create_responsive_search_ad",
+})
+
+
+def test_only_the_pinned_tools_create_anything(tools):
     for name in tools:
-        assert "create" not in name.lower(), name
+        if "create" in name.lower():
+            assert name in CREATION_TOOLS, f"{name} creates but is not pinned"
+
+
+def test_creation_previews_say_what_is_created_paused(tools):
+    for name in CREATION_TOOLS:
+        if name.startswith("preview_"):
+            assert "PAUSED" in (tools[name].title or "") + (tools[name].description or ""), name
+
+
+def test_creation_applies_are_destructive_and_say_they_cost_three(tools):
+    for name in CREATION_TOOLS:
+        if name.startswith("apply_"):
+            assert tools[name].annotations.destructive_hint is True, name
+            assert "3 applies" in (tools[name].title or ""), name
 
 
 def test_every_tool_has_a_description(tools):

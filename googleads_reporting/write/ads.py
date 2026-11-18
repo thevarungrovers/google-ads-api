@@ -166,3 +166,78 @@ def plan_create_responsive_search_ad(
         label=headlines[0], service=SERVICE, method=METHOD,
         operations=[operation], changes=changes,
     )
+
+
+def ad_group_ad_path(client: MutatingGoogleAdsClient, ad_group_id: str, ad_id: str) -> str:
+    return (
+        f"customers/{client.resolve_customer_id()}/adGroupAds/{int(ad_group_id)}~{int(ad_id)}"
+    )
+
+
+def _status_update(client, resource_name: str, status: str):
+    operation = client.get_type("AdGroupAdOperation")
+    operation.update.resource_name = resource_name
+    operation.update.status = getattr(client.enums.AdGroupAdStatusEnum, status)
+    set_update_mask(client, operation)
+    return operation
+
+
+def plan_replace_responsive_search_ad(
+    client: MutatingGoogleAdsClient,
+    *,
+    ad_group_resource_name: str,
+    old_ad_resource_name: str,
+    new_status: str,
+    headlines: Sequence[str],
+    descriptions: Sequence[str],
+    final_url: str,
+    path1: str | None = None,
+    path2: str | None = None,
+) -> PlannedChange:
+    """"Edit" an RSA: create the new one, pause the old one, in ONE request.
+
+    Google treats a changed ad as a new ad -- the text of an existing one
+    cannot be edited -- so an edit is a create plus a pause. Both operations go
+    to AdGroupAdService in a single request without partial_failure, so either
+    both land or neither does: there is never a moment with the old ad paused
+    and no new one, or both serving.
+
+    Operation order is load-bearing: [create new, pause old]. The response
+    names come back in that order, and the ledger records the FIRST one as the
+    new ad.
+    """
+    new = plan_create_responsive_search_ad(
+        client, ad_group_resource_name=ad_group_resource_name, headlines=headlines,
+        descriptions=descriptions, final_url=final_url, path1=path1, path2=path2,
+        status=new_status,
+    )
+    pause = _status_update(client, old_ad_resource_name, "PAUSED")
+    return PlannedChange(
+        action="replace", entity="responsive search ad", label=headlines[0],
+        service=SERVICE, method=METHOD, operations=[*new.operations, pause],
+        changes=[*new.changes, FieldChange("old ad", old_ad_resource_name, "PAUSED")],
+    )
+
+
+def plan_undo_replacement(
+    client: MutatingGoogleAdsClient,
+    *,
+    new_ad_resource_name: str,
+    old_ad_resource_name: str,
+    old_status: str,
+) -> PlannedChange:
+    """The inverse: pause the new ad and give the old one its status back.
+
+    The new ad is PAUSED, not removed -- nothing is removed here -- so it stays
+    in the ad group's history, which is also where its performance data lives.
+    """
+    return PlannedChange(
+        action="update", entity="responsive search ad", label="undo replacement",
+        service=SERVICE, method=METHOD,
+        operations=[
+            _status_update(client, new_ad_resource_name, "PAUSED"),
+            _status_update(client, old_ad_resource_name, old_status),
+        ],
+        changes=[FieldChange("new ad", None, "PAUSED"),
+                 FieldChange("old ad", "PAUSED", old_status)],
+    )

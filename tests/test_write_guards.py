@@ -261,4 +261,18 @@ def test_the_mutate_allowlist_is_exactly_what_was_chosen():
         "GoogleAdsService",
         # keywords and negatives
         "CampaignCriterionService", "SharedCriterionService", "CampaignSharedSetService",
+        # ads and assets
+        "CampaignAssetService", "AdGroupAssetService",
     }
+
+
+def test_an_atomic_request_cannot_smuggle_in_an_unlisted_service(client):
+    """GoogleAdsService.mutate reaches every service; each op is checked."""
+    from kindkit import RAW
+    from googleads_reporting.write.client import _service_of_mutate_operation
+
+    op = RAW.get_type("MutateOperation")
+    op.customer_label_operation.create.label = "customers/1/labels/2"
+    assert _service_of_mutate_operation(op) == "CustomerLabelService"
+    with pytest.raises(MutationError, match="CustomerLabelService"):
+        client.mutate_atomic([op], apply=False)

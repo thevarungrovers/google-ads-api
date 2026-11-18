@@ -225,6 +225,10 @@ class ChangeKind:
     #: (entity_type, field) pairs this kind writes to the ledger -- how
     #: revert_change finds the kind that can undo an entry.
     ledger_keys: tuple[tuple[str, str], ...] = ()
+    #: False for a kind whose entries cannot be undone here at all (a created
+    #: ad is never removed): revert_change then gives the kind's reason first,
+    #: rather than a staleness complaint about a value it would never touch.
+    revertible: bool = True
     #: Whether the preview also sends the mutation with validate_only=True, so
     #: it reflects whether GOOGLE will accept the change and not only whether
     #: our own bounds pass. Off only where the mutation cannot be built until

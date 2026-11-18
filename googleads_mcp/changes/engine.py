@@ -318,6 +318,8 @@ class Engine:
             raise ValueError(f"No ledger entry {entry_id!r}. See list_my_changes.")
         self._revertible(entry)
         kind = self.kind_for_entry(entry)
+        if not kind.revertible:
+            kind.inverse(ctx, entry)  # raises, with the kind's own reason
         self._not_stale(kind, entry)
         # Then the SPEND half, now that we know what undoing this restores:
         # reverting a pause or a cut puts spend back, and that counts against
@@ -359,6 +361,8 @@ class Engine:
         projected = Decimal("0")
         for entry in live:
             kind = self.kind_for_entry(entry)
+            if not kind.revertible:
+                kind.inverse(ctx, entry)
             self._not_stale(kind, entry)
             projected += kind.revert_projection(ctx, entry)[0]
             plans.append(kind.inverse(ctx, entry))
