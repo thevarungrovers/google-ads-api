@@ -246,3 +246,37 @@ def test_no_tracked_file_names_a_real_world_host():
         f"the tool genuinely calls, in which case add it to "
         f"_ALLOWED_HOST_SUFFIXES."
     )
+
+
+# --------------------------------------------------------------------------
+# The naming identity is the operator's, never the repo's
+# --------------------------------------------------------------------------
+
+_IDENTITY_KEYS = ("GOOGLE_ADS_MCP_OWNER_INITIALS", "GOOGLE_ADS_MCP_AGENT_NAME")
+
+
+def test_the_env_example_ships_the_identity_keys_empty():
+    lines = (PROJECT_ROOT / ".env.example").read_text().splitlines()
+    for key in _IDENTITY_KEYS:
+        assignments = [line for line in lines if line.startswith(f"{key}=")]
+        assert assignments == [f"{key}="], f"{key} must ship empty in .env.example"
+
+
+def test_no_tracked_file_assigns_a_real_identity():
+    """Only the placeholders AB / max (and CD / bot for a second identity)
+    may appear assigned to an identity key in anything tracked."""
+    allowed = {"", "AB", "CD", "max", "bot", "a1"}
+    offenders = []
+    pattern = _re.compile(r"(" + "|".join(_IDENTITY_KEYS) + r")\s*=\s*['\"]?([A-Za-z0-9_-]*)")
+    for name in tracked_files():
+        path = PROJECT_ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for key, value in pattern.findall(text):
+            if value not in allowed:
+                offenders.append(f"{name}: {key}={value}")
+    assert offenders == []

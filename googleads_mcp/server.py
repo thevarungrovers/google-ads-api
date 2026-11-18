@@ -43,6 +43,11 @@ from googleads_mcp import (  # noqa: E402
 from googleads_mcp.guardrails import Limits, SessionCounters, load_limits  # noqa: E402
 from googleads_mcp.previews import PreviewStore  # noqa: E402
 from googleads_reporting import logdb  # noqa: E402
+from googleads_reporting.naming import (  # noqa: E402
+    Identity,
+    load_identity,
+    process_env_mismatches,
+)
 
 SERVER_NAME = "google-ads"
 
@@ -140,6 +145,9 @@ class ServerState:
     read_client: Any = None
     write_client: Any = None
     default_customer_id: str = ""
+    #: Whose prefix goes on created names -- from this repo's .env ONLY, read
+    #: once here. See googleads_reporting/naming.py.
+    identity: Identity = field(default_factory=Identity)
 
 
 def build_state() -> ServerState:
@@ -148,7 +156,21 @@ def build_state() -> ServerState:
         limits=limits,
         counters=SessionCounters(limits),
         previews=PreviewStore(),
+        identity=load_identity(),
     )
+
+
+def identity_warnings(state: ServerState) -> list[str]:
+    """What to say on stderr at startup about the naming identity.
+
+    A malformed value refuses every create and rename at preview, so it is
+    worth seeing before then; a value in the process environment is ignored,
+    and saying so beats a mystery prefix later. Values are never printed.
+    """
+    out = [f"ERROR: {problem} Creating and renaming are refused until it is fixed."
+           for problem in state.identity.problems]
+    out += process_env_mismatches(state.identity)
+    return out
 
 
 # Built once at import, and the lifespan hands out THIS object rather than
@@ -220,6 +242,8 @@ def main() -> None:
         warning = f"WARNING: could not check campaign budgets at startup: {exc}"
     if warning:
         print(warning, file=sys.stderr)
+    for line in identity_warnings(STATE):
+        print(line, file=sys.stderr)
     mcp.run("stdio")
 
 

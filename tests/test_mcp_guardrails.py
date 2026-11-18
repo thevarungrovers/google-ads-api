@@ -354,3 +354,63 @@ def test_startup_warns_when_a_budget_is_over_the_daily_total():
     assert budget_ceiling_warning(SimpleNamespace(read_client=Read(100.0), limits=limits)) is None
     warning = budget_ceiling_warning(SimpleNamespace(read_client=Read(250.0), limits=limits))
     assert "250.00" in warning and "could not be re-enabled" in warning
+
+
+def test_build_state_reads_the_naming_identity_from_dotenv(tmp_path, monkeypatch):
+    from googleads_mcp import server
+    from googleads_reporting import naming
+
+    (tmp_path / ".env").write_text(
+        "GOOGLE_ADS_MCP_OWNER_INITIALS=AB\nGOOGLE_ADS_MCP_AGENT_NAME=max\n")
+    monkeypatch.setattr(naming, "IDENTITY_FILES", (tmp_path / ".env",))
+    monkeypatch.setenv("GOOGLE_ADS_MCP_AGENT_NAME", "bot")
+    state = server.build_state()
+    assert state.identity.prefix == "AB-max-"
+    warnings = server.identity_warnings(state)
+    assert len(warnings) == 1 and "GOOGLE_ADS_MCP_AGENT_NAME" in warnings[0]
+    assert "bot" not in warnings[0]
+
+
+def test_a_malformed_identity_is_a_startup_error_not_a_crash(tmp_path, monkeypatch):
+    from googleads_mcp import server
+    from googleads_reporting import naming
+
+    (tmp_path / ".env").write_text("GOOGLE_ADS_MCP_OWNER_INITIALS=a1\n")
+    monkeypatch.setattr(naming, "IDENTITY_FILES", (tmp_path / ".env",))
+    state = server.build_state()
+    assert not state.identity.valid
+    assert any(w.startswith("ERROR: GOOGLE_ADS_MCP_OWNER_INITIALS")
+               for w in server.identity_warnings(state))
+
+
+@pytest.mark.parametrize("owner, agent, prefix", [
+    ("AB", "max", "AB-max-"), ("AB", "", "AB-"), ("", "max", "max-"), ("", "", ""),
+])
+def test_get_guardrails_shows_which_identity_parts_are_set(monkeypatch, owner, agent, prefix):
+    from googleads_reporting.naming import Identity
+
+    identity = Identity.from_values(owner, agent, source=".env")
+    out = _guardrails_with(monkeypatch, identity)
+    assert out["identity"]["prefix"] == prefix
+    assert out["identity"]["owner_initials"] == (owner or None)
+    assert out["identity"]["agent_name"] == (agent or None)
+    assert out["identity"]["problems"] == []
+
+
+def _guardrails_with(monkeypatch, identity):
+    from types import SimpleNamespace
+
+    from googleads_mcp import tools_read
+    from googleads_mcp.guardrails import SessionCounters
+    from googleads_mcp.previews import PreviewStore
+    from googleads_reporting.client import ReadOnlyGoogleAdsClient
+    from kindkit import ReadAccount, Registrar, limits, read_client
+
+    client = read_client(ReadAccount())
+    monkeypatch.setattr(ReadOnlyGoogleAdsClient, "from_env", classmethod(lambda cls: client))
+    lim = limits()
+    state = SimpleNamespace(limits=lim, counters=SessionCounters(lim), previews=PreviewStore(),
+                            identity=identity)
+    registrar = Registrar()
+    tools_read.register(registrar, state)
+    return registrar.tools["get_guardrails"]()

@@ -16,7 +16,13 @@ from __future__ import annotations
 
 import pytest
 
-from googleads_reporting import logdb
+from googleads_reporting import logdb, naming
+
+# NO TEST MAY READ THE OPERATOR'S REAL NAMING IDENTITY either: it lives in the
+# repo's .env, and server.STATE is built at import. Module level, so it is in
+# place before any test module imports the server. A test that wants an
+# identity builds one (placeholders only: AB / max).
+naming.IDENTITY_FILES = ()
 
 
 @pytest.fixture(autouse=True)

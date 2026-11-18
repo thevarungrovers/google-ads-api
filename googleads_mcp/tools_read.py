@@ -257,11 +257,17 @@ def register(mcp, state) -> None:
 
         Call this before proposing a change, so you propose something that can
         actually be applied rather than something that will be refused.
+        `identity` is the naming prefix put on what you create (from the
+        repo's .env; which parts are set, and any problem with them).
         """
         from googleads_mcp.guardrails import DailyUsage, read_only_mode, writes_disabled
 
+        from googleads_reporting.naming import Identity
+
         read_only = read_only_mode()
+        identity = getattr(state, "identity", None) or Identity()
         return {
+            "identity": identity.describe(),
             "limits": state.limits.describe(),
             "session": state.counters.snapshot(),
             "daily": DailyUsage(state.limits).snapshot(),
