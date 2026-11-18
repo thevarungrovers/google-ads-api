@@ -278,3 +278,11 @@ def test_the_server_instructions_state_the_workflow():
     assert "preview" in text and "apply" in text
     assert "decimal string" in text.lower()
     assert "never pass micros" in text.lower()
+
+
+def test_find_campaigns_status_is_an_enum_not_free_text(tools):
+    """The value is interpolated into GAQL; a free string was injectable."""
+    schema = tools["find_campaigns"].input_schema["properties"]["status"]
+    options = schema.get("anyOf", [schema])
+    enums = [o.get("enum") for o in options if o.get("enum")]
+    assert enums == [["ENABLED", "PAUSED", "REMOVED"]], schema

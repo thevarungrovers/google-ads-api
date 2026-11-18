@@ -7,7 +7,7 @@ write unreachable regardless of what is asked for here.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -16,7 +16,14 @@ from pydantic import Field
 from googleads_mcp.errors import refusals_reach_the_caller
 from googleads_reporting.client import ReadOnlyGoogleAdsClient
 from googleads_reporting.export import summarise, to_dataframe
-from googleads_reporting.query import Query, between, contains, during, last_n_days
+from googleads_reporting.query import (
+    Query,
+    between,
+    contains,
+    during,
+    last_n_days,
+    quote_literal,
+)
 from googleads_reporting.reports import REGISTRY, get_report, report_names
 
 # ALL FOUR HINTS, ALWAYS, ON EVERY TOOL. A hint left unset is published as
@@ -89,8 +96,12 @@ def register(mcp, state) -> None:
             str | None,
             Field(description="Case-insensitive substring of the campaign name"),
         ] = None,
+        # A Literal, not a str: the value goes into GAQL, and a free string
+        # here was interpolated verbatim. The schema now refuses anything else
+        # before the tool body runs.
         status: Annotated[
-            str | None, Field(description="ENABLED, PAUSED or REMOVED")
+            Literal["ENABLED", "PAUSED", "REMOVED"] | None,
+            Field(description="ENABLED, PAUSED or REMOVED"),
         ] = None,
         limit: Annotated[int, Field(description="Max rows", ge=1, le=200)] = 50,
     ) -> list[dict[str, Any]]:
@@ -103,7 +114,7 @@ def register(mcp, state) -> None:
         if name_contains:
             where.append(contains("campaign.name", name_contains))
         if status:
-            where.append(f"campaign.status = '{status.upper()}'")
+            where.append(f"campaign.status = {quote_literal(status)}")
         rows = client.rows(
             Query(
                 select=_CAMPAIGN_FIELDS,
