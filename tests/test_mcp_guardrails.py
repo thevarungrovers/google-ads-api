@@ -317,7 +317,8 @@ def test_the_daily_spend_ceiling_refuses_the_change_that_crosses_it():
     _applied("a", delta="8")
     usage = DailyUsage(limits)
     assert usage.would_exceed(Decimal("2")) is None
-    assert "daily ceiling" in usage.would_exceed(Decimal("2.01"))
+    refusal = usage.would_exceed(Decimal("2.01"))
+    assert "uses 2.01 of today's remaining 2.00" in refusal
     snap = usage.snapshot()
     assert snap["applies_used"] == 1 and snap["projected_delta_remaining"] == "2"
 
@@ -334,3 +335,22 @@ def test_a_weighted_apply_needs_room_for_its_whole_weight():
     counters.record(Decimal("0"))
     assert counters.would_exceed(Decimal("0"), weight=2) is None
     assert counters.would_exceed(Decimal("0"), weight=3)
+
+
+def test_startup_warns_when_a_budget_is_over_the_daily_total():
+    from types import SimpleNamespace
+
+    from googleads_mcp.server import budget_ceiling_warning
+
+    class Read:
+        def __init__(self, amount):
+            self.amount = amount
+
+        def rows(self, _query):
+            return [{"campaign.id": 7, "campaign.name": "x",
+                     "campaign_budget.amount_micros": self.amount}]
+
+    limits = _limits(max_projected_delta_per_day_total=Decimal("150"))
+    assert budget_ceiling_warning(SimpleNamespace(read_client=Read(100.0), limits=limits)) is None
+    warning = budget_ceiling_warning(SimpleNamespace(read_client=Read(250.0), limits=limits))
+    assert "250.00" in warning and "could not be re-enabled" in warning

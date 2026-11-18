@@ -145,7 +145,47 @@ tools_audit.register(_registrar, STATE)
 tools_write.register(_registrar, STATE)
 
 
+def budget_ceiling_warning(state: ServerState) -> str | None:
+    """Warn when a campaign's budget is bigger than the whole day's allowance.
+
+    Re-enabling a campaign projects its full daily budget against
+    max_projected_delta_per_day_total. If one budget is bigger than that
+    total, the campaign can never be re-enabled through this server once
+    paused -- which is worth knowing at startup, not at the moment somebody
+    needs it back on.
+    """
+    from googleads_reporting.query import Query
+
+    rows = state.read_client.rows(Query(
+        select=("campaign.id", "campaign.name", "campaign_budget.amount_micros"),
+        from_resource="campaign",
+        where=("campaign.status != 'REMOVED'",),
+        order_by=("campaign_budget.amount_micros DESC",),
+        limit=1,
+    ))
+    if not rows:
+        return None
+    biggest = rows[0]["campaign_budget.amount_micros"] or 0
+    ceiling = state.limits.max_projected_delta_per_day_total
+    if biggest > ceiling:
+        return (
+            f"WARNING: campaign {rows[0]['campaign.id']} has a daily budget of "
+            f"{biggest:.2f}, above max_projected_delta_per_day_total ({ceiling}). "
+            "Once paused it could not be re-enabled through this server. Raise the "
+            "total in guardrails.toml to at least the largest campaign budget."
+        )
+    return None
+
+
 def main() -> None:
+    # Only when actually serving, never at import: the tests import this
+    # module, and a startup check must not send a query from a test run.
+    try:
+        warning = budget_ceiling_warning(STATE)
+    except Exception as exc:  # noqa: BLE001 - a startup courtesy, never fatal
+        warning = f"WARNING: could not check campaign budgets at startup: {exc}"
+    if warning:
+        print(warning, file=sys.stderr)
     mcp.run("stdio")
 
 

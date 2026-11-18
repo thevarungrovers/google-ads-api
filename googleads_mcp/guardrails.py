@@ -201,8 +201,14 @@ class Check:
     name: str
     ok: bool
     detail: str
+    #: Deliberately not applied to this change (it still passes). Rendered as
+    #: SKIP so a human reading the preview sees the bound was considered and
+    #: why it does not apply, rather than an OK that suggests it was checked.
+    skipped: bool = False
 
     def render(self) -> str:
+        if self.skipped:
+            return f"SKIP {self.name} ({self.detail})"
         return f"{'OK  ' if self.ok else 'FAIL'} {self.name}: {self.detail}"
 
 
@@ -317,15 +323,31 @@ class DailyUsage:
                 "time, across every server process). It resets at local midnight. "
                 "Stop and tell the human; this cap is set in guardrails.toml."
             )
-        total = delta + max(projected_delta, Decimal("0"))
-        if total > self._limits.max_projected_delta_per_day_total:
+        check = self.check(projected_delta, delta)
+        if not check.ok:
             return (
-                f"this change would take today's projected added daily spend to "
-                f"{total}, over the {self._limits.max_projected_delta_per_day_total} "
-                "daily ceiling (max_projected_delta_per_day_total). It resets at "
-                "local midnight."
+                f"daily spend total reached: this change {check.detail} "
+                f"(max_projected_delta_per_day_total = "
+                f"{self._limits.max_projected_delta_per_day_total}, local day, across "
+                "every server process). It resets at local midnight."
             )
         return None
+
+    def check(self, projected_delta: Decimal, used: Decimal | None = None) -> Check:
+        """The daily-total line for a preview: "uses X of today's remaining Y".
+
+        Both figures, always: "over the ceiling" alone does not tell a human
+        whether the change is too big or the day is already spent.
+        """
+        if used is None:
+            used = self.usage()[1]
+        remaining = max(Decimal("0"), self._limits.max_projected_delta_per_day_total - used)
+        wanted = max(projected_delta, Decimal("0"))
+        return Check(
+            "max_projected_delta_per_day_total",
+            wanted <= remaining,
+            f"uses {wanted:.2f} of today's remaining {remaining:.2f}",
+        )
 
     def snapshot(self) -> dict[str, object]:
         applies, delta = self.usage()

@@ -221,6 +221,7 @@ class KeywordStatus(ChangeKind):
             entity_name=_label(row), path=f"{row.campaign.name} > {row.ad_group.name}",
             field_name="status", before=before, after=wanted, checks=[],
             projected=projected, campaign_id=str(row.campaign.id), note=note,
+            is_enable=wanted == "ENABLED",
             warnings=[f"already {wanted}"] if before == wanted else [],
             payload={"ad_group_id": str(ad_group_id), "criterion_id": str(criterion_id)},
         )
@@ -238,6 +239,12 @@ class KeywordStatus(ChangeKind):
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         return _keyword_row(ctx, *_split(entry["entity_id"])).ad_group_criterion.status.name
+
+    def revert_projection(self, ctx, entry: dict[str, Any]) -> tuple[Decimal, bool]:
+        if entry["before"] != "ENABLED":
+            return Decimal("0"), False
+        row = _keyword_row(ctx, *_split(entry["entity_id"]))
+        return campaign_headroom(ctx, str(row.campaign.id))[0], True
 
     def inverse(self, ctx, entry: dict[str, Any]):
         ad_group_id, criterion_id = _split(entry["entity_id"])

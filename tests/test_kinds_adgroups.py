@@ -112,3 +112,118 @@ def test_the_scope_check_compares_the_customer_the_write_targets():
     engine.ctx.state.default_customer_id = "9998887777"
     preview = engine.preview(kind, {"ad_group_id": "22", "new_status": "PAUSED"})
     assert failed(preview, "customer_in_scope")
+
+
+# --------------------------------------------------------------------------
+# Re-enabling counts against the DAILY total, not the per-change limit
+# --------------------------------------------------------------------------
+
+
+def _big_campaign(client, *, status="PAUSED"):
+    """A campaign whose 100/day budget is over the per-change 50 limit."""
+    client.answer("FROM campaign\n", [row(**{
+        "campaign.id": 11, "campaign.name": "Brand - Search - EN", "campaign.status": status,
+        "campaign.resource_name": "customers/1112223333/campaigns/11",
+        "campaign_budget.id": 5, "campaign_budget.amount_micros": 100_000_000,
+    })])
+
+
+def _spent_today(amount: str) -> None:
+    from googleads_mcp import ledger
+
+    entry = ledger.new_entry_id()
+    ledger.write_intent(
+        entry_id=entry, tool="apply_x", customer_id="1", entity_type="campaign",
+        entity_id="99", entity_name="other", field_name="daily_budget", before="a",
+        after="b", projected_delta=amount,
+    )
+    ledger.write_outcome(entry_id=entry, ok=True)
+
+
+def test_re_enabling_a_100_a_day_campaign_with_nothing_used_passes():
+    from googleads_mcp.changes.campaigns import CampaignStatus
+
+    engine, client, _ = rig(max_projected_delta_per_day_total=Decimal("150"))
+    _big_campaign(client)
+    kind = engine.add(CampaignStatus())
+
+    preview = engine.preview(kind, {"campaign_id": "11", "new_status": "ENABLED"})
+
+    assert preview.blocked is False, preview.checks
+    assert "SKIP projected_delta_per_day (enable: counted against the daily total)" in preview.checks
+    assert any("uses 100.00 of today's remaining 150.00" in c for c in preview.checks)
+    assert any("resumes spend up to the daily budget" in w and "remaining 150.00" in w
+               for w in preview.warnings)
+    engine.apply(kind, preview.preview_token)
+
+
+def test_re_enabling_with_60_already_used_under_150_is_refused_with_both_figures():
+    from googleads_mcp.changes.campaigns import CampaignStatus
+    from googleads_mcp.previews import PreviewExpired
+
+    engine, client, _ = rig(max_projected_delta_per_day_total=Decimal("150"),
+                            max_projected_session_delta=Decimal("500"))
+    _big_campaign(client)
+    kind = engine.add(CampaignStatus())
+    preview = engine.preview(kind, {"campaign_id": "11", "new_status": "ENABLED"})
+    _spent_today("60")  # another process used 60 of the day in between
+
+    with pytest.raises(PreviewExpired, match="uses 100.00 of today's remaining 90.00"):
+        engine.apply(kind, preview.preview_token)
+    assert client.applied == []
+
+    blocked = engine.preview(kind, {"campaign_id": "11", "new_status": "ENABLED"})
+    assert failed(blocked, "max_projected_delta_per_day_total")
+
+
+def test_a_budget_increase_still_needs_the_per_change_limit():
+    from googleads_mcp.changes.campaigns import CampaignDailyBudget
+
+    engine, client, _ = rig(max_daily_budget=Decimal("500"), max_budget_change_pct=500.0)
+    _big_campaign(client, status="ENABLED")
+    client.answer("FROM campaign_budget", [row(**{
+        "campaign_budget.id": 5, "campaign_budget.amount_micros": 100_000_000,
+        "campaign_budget.explicitly_shared": False,
+    })])
+    kind = engine.add(CampaignDailyBudget())
+    preview = engine.preview(kind, {"campaign_id": "11", "new_daily_budget": "160.00"})
+    assert failed(preview, "projected_delta_per_day")
+
+
+def test_reverting_a_pause_projects_the_budget_it_restores():
+    from googleads_mcp.changes.campaigns import CampaignStatus
+    from googleads_mcp.previews import PreviewExpired
+
+    engine, client, _ = rig(max_projected_delta_per_day_total=Decimal("150"),
+                            max_projected_session_delta=Decimal("500"))
+    _big_campaign(client, status="ENABLED")
+    kind = engine.add(CampaignStatus())
+    _, paused = preview_and_apply(engine, kind, campaign_id="11", new_status="PAUSED")
+    _big_campaign(client, status="PAUSED")
+    _spent_today("60")
+
+    with pytest.raises(PreviewExpired, match="remaining 90.00"):
+        engine.revert(paused.entry_id)
+
+
+def test_reverting_a_budget_cut_projects_the_inverse_of_the_cut():
+    from googleads_mcp.changes.campaigns import CampaignDailyBudget
+
+    engine, client, _ = rig()
+    _big_campaign(client, status="ENABLED")
+    budget = lambda micros: client.answer("FROM campaign_budget", [row(**{  # noqa: E731
+        "campaign_budget.id": 5, "campaign_budget.amount_micros": micros,
+        "campaign_budget.explicitly_shared": False,
+        "campaign_budget.resource_name": "customers/1112223333/campaignBudgets/5",
+    })])
+    budget(100_000_000)
+    kind = engine.add(CampaignDailyBudget())
+    _, cut = preview_and_apply(engine, kind, campaign_id="11", new_daily_budget="80.00")
+    client.answer("FROM campaign\n", [row(**{
+        "campaign.id": 11, "campaign.name": "Brand - Search - EN", "campaign.status": "ENABLED",
+        "campaign_budget.id": 5, "campaign_budget.amount_micros": 80_000_000,
+    })])
+    budget(80_000_000)
+
+    result = engine.revert(cut.entry_id)
+    assert result.projected_daily_spend_delta == "20.00"

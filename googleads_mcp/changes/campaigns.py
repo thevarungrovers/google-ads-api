@@ -76,6 +76,7 @@ class CampaignStatus(ChangeKind):
             metrics=metrics,
             campaign_status=before,
             campaign_id=str(row.campaign.id),
+            is_enable=wanted == "ENABLED",
             warnings=warnings,
             payload={"campaign_id": str(row.campaign.id), "name": row.campaign.name},
             note=(
@@ -94,6 +95,13 @@ class CampaignStatus(ChangeKind):
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         return campaigns.find(ctx.client, campaign_id=entry["entity_id"]).campaign.status.name
+
+    def revert_projection(self, ctx, entry: dict[str, Any]) -> tuple[Decimal, bool]:
+        # Undoing a PAUSE resumes delivery: the same bound as enabling.
+        if entry["before"] != "ENABLED":
+            return Decimal("0"), False
+        row = campaigns.find(ctx.client, campaign_id=entry["entity_id"])
+        return money(row.campaign_budget.amount_micros), True
 
     def inverse(self, ctx, entry: dict[str, Any]):
         return campaigns.plan_set_status(

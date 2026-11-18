@@ -116,9 +116,22 @@ class Engine:
         checks.extend(proposal.checks)
         if proposal.batch:
             checks.append(check_count(ctx.limits, len(items)))
-        checks.append(
-            check_projected_delta(ctx.limits, max(proposal.projected, Decimal("0")))
-        )
+        if proposal.is_enable:
+            checks.append(Check(
+                "projected_delta_per_day", True,
+                "enable: counted against the daily total", skipped=True,
+            ))
+        else:
+            checks.append(
+                check_projected_delta(ctx.limits, max(proposal.projected, Decimal("0")))
+            )
+        daily_total = ctx.daily.check(proposal.projected)
+        checks.append(daily_total)
+        enable_warnings = []
+        if proposal.is_enable and proposal.projected > 0:
+            enable_warnings.append(
+                f"re-enabling resumes spend up to the daily budget; it {daily_total.detail}"
+            )
 
         payload = dict(proposal.payload)
         payload["before"] = proposal.before
@@ -161,7 +174,8 @@ class Engine:
             projected_daily_spend_delta=f"{proposal.projected:.2f}",
             checks=render_checks(checks),
             blocked=blocked,
-            warnings=[*proposal.warnings, *ctx.cap_warnings(proposal.projected, kind.weight)],
+            warnings=[*proposal.warnings, *enable_warnings,
+                      *ctx.cap_warnings(proposal.projected, kind.weight)],
             note=proposal.note,
             items=(
                 [{k: v for k, v in asdict(i).items() if k != "detail"} for i in items]
@@ -292,6 +306,8 @@ class Engine:
         # including changes from earlier sessions this process never saw, so
         # without the APPLIES cap a revert loop had no bound at all.
         require_writes_enabled()
+        # The APPLIES half of the caps first, before any lookup: a revert loop
+        # must stop even on entries that turn out not to exist.
         self._refuse_if_over_caps(Decimal("0"), 1)
 
         entry = ledger.find_entry(entry_id)
@@ -303,19 +319,27 @@ class Engine:
         self._revertible(entry)
         kind = self.kind_for_entry(entry)
         self._not_stale(kind, entry)
+        # Then the SPEND half, now that we know what undoing this restores:
+        # reverting a pause or a cut puts spend back, and that counts against
+        # the session and daily totals like any enable (exempt, like one, from
+        # the per-change limit).
+        projected, _ = kind.revert_projection(ctx, entry)
+        self._refuse_if_over_caps(projected, 1)
         plan = kind.inverse(ctx, entry)
 
         _, entry_ids, _ = self._send_recorded(
             plan,
             [self._inverse_item(entry)],
             tool="revert_change",
-            projected=Decimal("0"),
+            projected=projected,
             weight=1,
             resource_names_for=lambda names: names[:1],
             reverts=[entry_id],
         )
-        ctx.counters.record(Decimal("0"))
-        return self._revert_result(entry, entry_ids[0])
+        ctx.counters.record(projected)
+        result = self._revert_result(entry, entry_ids[0])
+        result.projected_daily_spend_delta = f"{projected:.2f}"
+        return result
 
     def _revert_batch(self, batch_id: str, batch: list[dict[str, Any]]) -> ApplyResult:
         """Undo every still-applied row of one batch, as ONE request.
@@ -332,23 +356,27 @@ class Engine:
                 "was never applied or has already been reverted."
             )
         plans = []
+        projected = Decimal("0")
         for entry in live:
             kind = self.kind_for_entry(entry)
             self._not_stale(kind, entry)
+            projected += kind.revert_projection(ctx, entry)[0]
             plans.append(kind.inverse(ctx, entry))
+        self._refuse_if_over_caps(projected, 1)
         plan = merge_plans(plans)
 
         _, entry_ids, new_batch = self._send_recorded(
             plan,
             [self._inverse_item(e) for e in live],
             tool="revert_change",
-            projected=Decimal("0"),
+            projected=projected,
             weight=1,
             resource_names_for=lambda names: names,
             reverts=[e["entry_id"] for e in live],
         )
-        ctx.counters.record(Decimal("0"))
+        ctx.counters.record(projected)
         result = self._revert_result(live[0], entry_ids[0])
+        result.projected_daily_spend_delta = f"{projected:.2f}"
         result.batch_id = new_batch
         result.entry_ids = entry_ids
         result.entity_name = f"{len(live)} entries of batch {batch_id}"

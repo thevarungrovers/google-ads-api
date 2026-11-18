@@ -88,6 +88,10 @@ class ApplyResult(BaseModel):
     daily: dict[str, Any] | None = Field(
         default=None, description="Today's change budget left after this"
     )
+    projected_daily_spend_delta: str | None = Field(
+        default=None,
+        description="For a revert: the spend it restores (undoing a pause or a cut)",
+    )
 
 
 class PreviewExpired(RuntimeError):

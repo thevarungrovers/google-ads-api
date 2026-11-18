@@ -98,6 +98,7 @@ class AdGroupStatus(ChangeKind):
             metrics=metrics,
             campaign_id=str(row.campaign.id),
             campaign_status=campaign_status,
+            is_enable=wanted == "ENABLED",
             warnings=["already " + wanted] if before == wanted else [],
             payload={"ad_group_id": str(row.ad_group.id), "name": row.ad_group.name},
             note=note,
@@ -113,6 +114,17 @@ class AdGroupStatus(ChangeKind):
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         return adgroups.find(ctx.client, ad_group_id=entry["entity_id"]).ad_group.status.name
+
+    def revert_projection(self, ctx, entry: dict[str, Any]) -> tuple[Decimal, bool]:
+        # Undoing a PAUSE resumes delivery, bounded like an enable: the
+        # campaign's budget, or nothing while the campaign itself is paused.
+        if entry["before"] != "ENABLED":
+            return Decimal("0"), False
+        row = adgroups.find(ctx.client, ad_group_id=entry["entity_id"])
+        campaign = campaigns.find(ctx.client, campaign_id=str(row.campaign.id))
+        if campaign.campaign.status.name != "ENABLED":
+            return Decimal("0"), False
+        return money(campaign.campaign_budget.amount_micros), True
 
     def inverse(self, ctx, entry: dict[str, Any]):
         return adgroups.plan_set_status(

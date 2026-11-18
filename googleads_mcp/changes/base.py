@@ -181,6 +181,14 @@ class Proposal:
     campaign_id: str | None = None
     #: Whether this is a batch, so the engine adds the entities_per_call check.
     batch: bool = False
+    #: An ENABLE -- resuming delivery of something paused. Its projection is
+    #: the whole daily budget it can resume, which on any real campaign is
+    #: over the per-change max_projected_delta_per_day; if that limit applied,
+    #: a campaign with a budget over it could never be re-enabled. So an
+    #: enable is exempt from the per-change limit and counted, in full,
+    #: against the DAILY total (and the session total) instead. Bid and budget
+    #: increases are not enables and must pass both.
+    is_enable: bool = False
 
     def ledger_items(self) -> list[LedgerItem]:
         if self.items:
@@ -251,6 +259,22 @@ class ChangeKind:
         return [None] * len(items)
 
     # -- revert ----------------------------------------------------------
+
+    def revert_projection(self, ctx, entry: dict[str, Any]) -> tuple[Decimal, bool]:
+        """(projected added daily spend, is_enable) for reverting ``entry``.
+
+        A revert is not free: reverting a budget CUT puts spend back. The
+        default is the inverse of what the original change projected -- a cut
+        of 10 reverts as +10 -- counted like an enable, since it restores a
+        state the account already had. Kinds whose original projected 0 but
+        whose revert resumes delivery (undoing a pause) override this.
+        """
+        try:
+            original = Decimal(str(entry.get("projected_daily_spend_delta") or "0"))
+        except (InvalidOperation, ValueError):
+            original = Decimal("0")
+        restored = max(-original, Decimal("0"))
+        return restored, restored > 0
 
     def current_for_entry(self, ctx, entry: dict[str, Any]) -> str | None:
         """Today's value for a ledger entry's field, as the entry stored it.
