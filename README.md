@@ -529,7 +529,10 @@ A revert is not free. Undoing a cut, a pause or anything that narrowed delivery
 projects the spend it puts back. Reverting a **revert** re-applies the original
 change, so it costs what that change cost -- a change that both narrowed and
 widened (Search Partners off and Display on) is not free to re-apply -- and it
-is held to the per-change limit and the kind's own checks again. A negative
+is held to the per-change limit and the kind's own checks again. Down a chain
+of reverts, only every other step re-applies the change; the steps between
+only restore the state before it, and like any undo are exempt from the
+per-change limit (never from the session and daily totals). A negative
 recorded before the ledger kept the campaigns it narrowed is reverted only when
 its campaign can be read off the row; otherwise the revert is refused.
 

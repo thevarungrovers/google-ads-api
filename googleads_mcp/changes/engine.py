@@ -41,6 +41,7 @@ from googleads_mcp.changes.base import (
     LedgerItem,
     Proposal,
     entry_campaigns,
+    lands_on_change,
     undone_change,
 )
 from googleads_mcp.guardrails import (
@@ -628,6 +629,9 @@ class Engine:
             "projected": str(entry.get("projected_daily_spend_delta") or "0"),
             "narrowing": kind.narrowed_for(entry),
             "batch_id": entry.get("batch_id"),
+            # Parity: whether ``entry`` left a forward change in place, so
+            # reverting this row re-applies it (base.reapplies_change).
+            "forward": lands_on_change(entry),
         }
         previous = undone_change(entry)
         if previous is not None and previous.get("narrowing") is not None:

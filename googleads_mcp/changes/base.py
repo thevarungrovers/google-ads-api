@@ -251,6 +251,43 @@ def undone_change(entry: dict[str, Any]) -> dict[str, Any] | None:
     return undone if isinstance(undone, dict) else None
 
 
+def reapplies_change(entry: dict[str, Any]) -> bool:
+    """Whether reverting ``entry`` puts a FORWARD change back on the account.
+
+    A chain of reverts alternates between two states: the one before the
+    original change (A) and the one after it (B). Reverting the original
+    goes to A; reverting that revert goes back to B -- a re-application;
+    reverting THAT goes to A again, which only restores a state the account
+    already had, like any plain undo. So it is parity, not "carries undoes":
+    every revert row records under ``undoes["forward"]`` whether the row it
+    undid left the account in B, and reverting it re-applies exactly then.
+
+    A revert row written before ``forward`` was recorded is read off the row
+    it undid in the ledger; if that row is gone too, it counts as a
+    re-application when the change it would put back widened.
+    """
+    undone = undone_change(entry)
+    if undone is None:
+        return False
+    if "forward" in undone:
+        return bool(undone["forward"])
+    from googleads_mcp import ledger
+
+    previous = ledger.find_entry(undone["entry_id"]) if undone.get("entry_id") else None
+    if previous is not None and previous.get("entry_id") != entry.get("entry_id"):
+        return lands_on_change(previous)
+    return _decimal(undone.get("projected")) > 0
+
+
+def lands_on_change(entry: dict[str, Any]) -> bool:
+    """Whether ``entry`` left the account in a forward change's state (B):
+    a forward change does; a revert does exactly when reverting it would not
+    re-apply one."""
+    if undone_change(entry) is None:
+        return entry.get("tool") != "revert_change"
+    return not reapplies_change(entry)
+
+
 def entry_campaigns(entry: dict[str, Any]) -> list[str] | None:
     """The campaign(s) a ledger row touched; [] for an account-level change,
     None when the row cannot say (it predates the scope being recorded).
@@ -428,13 +465,20 @@ class ChangeKind:
         return entry_campaigns(entry)
 
     def reapplies(self, entry: dict[str, Any]) -> bool:
-        """Whether reverting ``entry`` re-applies a change it undid.
+        """Whether reverting ``entry`` re-applies a forward change it undid.
 
-        True for EVERY revert's row (one that carries ``undoes``), narrowing
-        or not: it is not "restoring a state the account had" but an earlier
-        change again, so the engine holds it to the per-change limit and to
-        :meth:`reapply_checks`, as that change's preview did -- on the single
-        and the batch path alike. A pure narrowing re-applies at 0 and passes.
+        True when the revert would put a FORWARD change back -- reverting the
+        undo of a change, the undo of that re-application's undo, and so on
+        (see :func:`reapplies_change`). That is not "restoring a state the
+        account had" but the change again, widening or mixed, so the engine
+        holds it to the per-change limit and to :meth:`reapply_checks`, as
+        that change's preview did -- on the single and the batch path alike.
+        A pure narrowing re-applies at 0 and passes.
+
+        False when the revert only restores the state before the original
+        change (every other step of a chain): that is a plain undo, exempt
+        from the per-change limit like any revert, though it still counts in
+        the daily and session totals.
 
         Kinds that override :meth:`revert_projection` (a status: undoing a
         pause) project an ENABLE, which is exempt from the per-change limit
@@ -442,7 +486,7 @@ class ChangeKind:
         """
         if type(self).revert_projection is not ChangeKind.revert_projection:
             return False
-        return undone_change(entry) is not None
+        return reapplies_change(entry)
 
     def inverse_detail(self, detail: dict[str, Any]) -> dict[str, Any]:
         """The ``detail`` for a revert's own row, given the reverted row's.

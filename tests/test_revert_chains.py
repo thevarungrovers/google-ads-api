@@ -339,3 +339,172 @@ def test_location_add_and_exclude_reapply_at_headroom():
     with pytest.raises(Exception, match="projected_delta_per_day"):
         engine.revert(undo.batch_id)
     assert len(client.applied) == sent
+
+
+# -- parity: only every other step of a chain re-applies the change ------------
+#
+# A chain alternates between the state before the original change (A) and the
+# one after it (B). A revert that lands on B re-applies the change and answers
+# to the per-change limit; one that lands on A only restores what the account
+# had -- a plain undo, exempt from that limit, though still counted in the
+# session and daily totals. Carrying ``undoes`` is not enough to tell them
+# apart: every row past the first carries it.
+
+TIGHT = Decimal("10")
+
+
+def walk(engine, client, entry_id, settle, depth, *, reapplying, batch=False):
+    """Revert ``depth`` deep under a per-change limit of TIGHT. Steps listed in
+    ``reapplying`` (1-based) must be refused under it, sending nothing, and
+    then go through once it is lifted; every other step must pass under it."""
+    out = []
+    for step in range(1, depth + 1):
+        engine.ctx.state.limits = limits(max_projected_delta_per_day=TIGHT)
+        if step in reapplying:
+            sent = len(client.applied)
+            with pytest.raises(Exception, match="projected_delta_per_day"):
+                engine.revert(entry_id)
+            assert len(client.applied) == sent, f"step {step} sent something"
+            engine.ctx.state.limits = limits()
+        result = engine.revert(entry_id)
+        out.append(Decimal(result.projected_daily_spend_delta))
+        rows = [ledger.find_entry(e) for e in (result.entry_ids or [result.entry_id])]
+        settle(rows[0]["after"])
+        entry_id = result.batch_id if batch else result.entry_id
+    return out
+
+
+def test_a_cut_reverted_five_deep_holds_only_reapplications_to_the_per_change_limit():
+    """The reviewer's probe: revert 3 restores the pre-cut modifier (29.00) --
+    a plain undo -- and was refused against 10 because its row carried undoes."""
+    engine, client, kind, settle = modifier_rig(0.9)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", device="DESKTOP",
+                                  bid_modifier_pct="-30")
+    settle("-30%")
+    assert walk(engine, client, result.entry_id, settle, 5, reapplying=()) == \
+        [HEADROOM, 0, HEADROOM, 0, HEADROOM]
+
+
+def test_a_raise_reverted_five_deep_holds_every_reapplication_to_the_per_change_limit():
+    engine, client, kind, settle = modifier_rig(0.7)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", device="DESKTOP",
+                                  bid_modifier_pct="-10")
+    settle("-10%")
+    assert walk(engine, client, result.entry_id, settle, 5, reapplying=(2, 4)) == \
+        [0, HEADROOM, 0, HEADROOM, 0]
+
+
+def test_a_mixed_change_reverted_five_deep_holds_every_reapplication_to_the_limit():
+    # Six steps at 29.00 each: room in the session total for all of them.
+    engine, client, kind, settle = mixed_networks_rig(max_projected_session_delta=Decimal("500"))
+    _, result = preview_and_apply(engine, kind, campaign_id="11",
+                                  search_partners=False, display_network=True)
+    settle("display_network=on, search_partners=off")
+    assert walk(engine, client, result.entry_id, settle, 5, reapplying=(2, 4)) == \
+        [HEADROOM] * 5
+
+
+def test_an_exempt_undo_still_counts_in_the_session_total():
+    engine, client, kind, settle = modifier_rig(0.9)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", device="DESKTOP",
+                                  bid_modifier_pct="-30")
+    settle("-30%")
+    last = None
+    entry_id = result.entry_id
+    for _ in range(2):
+        last = engine.revert(entry_id)
+        settle(ledger.find_entry(last.entry_id)["after"])
+        entry_id = last.entry_id
+    counters = engine.ctx.counters
+    counters._limits = limits(max_projected_delta_per_day=TIGHT,
+                              max_projected_session_delta=counters.projected_delta + TIGHT)
+    engine.ctx.state.limits = counters._limits
+    sent = len(client.applied)
+    with pytest.raises(Exception, match="session"):
+        engine.revert(entry_id)  # step 3: exempt from the per-change limit only
+    assert len(client.applied) == sent
+
+
+class TwoDeviceModifier(DeviceBidModifier):
+    """Test-only: one modifier on DESKTOP and MOBILE as ONE batch, so a chain
+    of reverts runs on the batch path with a kind that is not a creation."""
+
+    name = "two_device_modifier"
+
+    def propose(self, ctx, campaign_id: str, bid_modifier_pct: str):
+        parts = [DeviceBidModifier.propose(self, ctx, campaign_id=campaign_id, device=d,
+                                           bid_modifier_pct=bid_modifier_pct)
+                 for d in ("DESKTOP", "MOBILE")]
+        out = parts[0]
+        out.items = [p.items[0] for p in parts]
+        out.before = "; ".join(p.before for p in parts)
+        out.batch = True
+        out.payload = {"parts": [p.payload for p in parts]}
+        return out
+
+    def current(self, ctx, payload):
+        return "; ".join(DeviceBidModifier.current(self, ctx, p) for p in payload["parts"])
+
+    def build(self, ctx, payload):
+        from googleads_mcp.changes.engine import merge_plans
+
+        return merge_plans([DeviceBidModifier.build(self, ctx, p) for p in payload["parts"]])
+
+
+def two_device_rig(start):
+    engine, client, _ = rig()
+    campaign(client)
+    multipliers = {"-10%": 0.9, "-30%": 0.7, "-50%": 0.5}
+
+    def devices(modifier):
+        client.answer("campaign_criterion.type = 'DEVICE'", [row(**{
+            "campaign_criterion.criterion_id": 30001 + i,
+            "campaign_criterion.bid_modifier": modifier,
+            "campaign_criterion.device.type_": name,
+        }) for i, name in enumerate(("DESKTOP", "MOBILE"))])
+
+    devices(start)
+    kind = engine.add(TwoDeviceModifier())
+    return engine, client, kind, lambda after: devices(multipliers[after])
+
+
+def test_a_batch_cut_reverted_five_deep_holds_only_reapplications_to_the_limit():
+    engine, client, kind, settle = two_device_rig(0.9)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", bid_modifier_pct="-30")
+    assert result.batch_id
+    settle("-30%")
+    assert walk(engine, client, result.batch_id, settle, 5, reapplying=(), batch=True) == \
+        [HEADROOM, 0, HEADROOM, 0, HEADROOM]
+
+
+def test_a_batch_raise_reverted_five_deep_holds_every_reapplication_to_the_limit():
+    engine, client, kind, settle = two_device_rig(0.7)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", bid_modifier_pct="-10")
+    settle("-10%")
+    assert walk(engine, client, result.batch_id, settle, 5, reapplying=(2, 4), batch=True) == \
+        [0, HEADROOM, 0, HEADROOM, 0]
+
+
+def test_a_revert_row_without_the_parity_flag_is_read_off_the_ledger():
+    """Rows written before ``forward`` was recorded: the row they undid says."""
+    import copy
+
+    engine, client, kind, settle = modifier_rig(0.9)
+    _, result = preview_and_apply(engine, kind, campaign_id="11", device="DESKTOP",
+                                  bid_modifier_pct="-30")
+    settle("-30%")
+    undo = engine.revert(result.entry_id)
+    settle(ledger.find_entry(undo.entry_id)["after"])
+    redo = engine.revert(undo.entry_id)
+
+    def legacy(entry_id):
+        entry = copy.deepcopy(ledger.find_entry(entry_id))
+        del entry["detail"]["undoes"]["forward"]
+        return entry
+
+    assert kind.reapplies(legacy(undo.entry_id))       # back to the cut
+    assert not kind.reapplies(legacy(redo.entry_id))   # back to before it
+    orphan = legacy(redo.entry_id)
+    orphan["detail"]["undoes"]["entry_id"] = "gone"
+    # The undone row is gone: held to the limit, since it would put a widening back.
+    assert kind.reapplies(orphan)
