@@ -47,7 +47,17 @@ class WriteContext:
         return self.state.default_customer_id
 
     def target_customer(self) -> str:
-        """The customer a write will actually be sent to."""
+        """The customer a write will actually be sent to.
+
+        Asked of the WRITE client, which is what resolves the customer id on
+        every mutate -- not read off the server's default. The scope check used
+        to be called as check_customer_in_scope(limits, default, default),
+        comparing a value with itself; with an empty allowlist that could never
+        fail, whichever account the writes were really going to.
+        """
+        resolve = getattr(self.client, "resolve_customer_id", None)
+        if callable(resolve):
+            return resolve()
         return self.default_customer
 
     # -- sending ---------------------------------------------------------

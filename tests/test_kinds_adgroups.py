@@ -92,3 +92,23 @@ def test_a_bid_increase_over_the_limit_is_blocked():
     kind = engine.add(AdGroupCpcBid())
     preview = engine.preview(kind, {"ad_group_id": "22", "new_cpc_bid": "3.00"})
     assert failed(preview, "max_bid_increase_pct")
+
+
+def test_the_scope_check_compares_the_customer_the_write_targets():
+    """It used to compare the default customer with itself."""
+    from kindkit import limits
+
+    engine, client, _ = rig()
+    account(client)
+    engine.ctx.state.limits = limits(allowed_customer_ids=("9998887777",))
+    kind = engine.add(AdGroupStatus())
+    preview = engine.preview(kind, {"ad_group_id": "22", "new_status": "PAUSED"})
+    assert failed(preview, "customer_in_scope")
+    assert preview.customer_id == client.resolve_customer_id()
+
+    # With no allowlist, only the server's own default account is in scope --
+    # and a write client pointed elsewhere is caught.
+    engine.ctx.state.limits = limits()
+    engine.ctx.state.default_customer_id = "9998887777"
+    preview = engine.preview(kind, {"ad_group_id": "22", "new_status": "PAUSED"})
+    assert failed(preview, "customer_in_scope")
