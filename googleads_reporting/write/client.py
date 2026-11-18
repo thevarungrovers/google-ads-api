@@ -143,18 +143,26 @@ class MutatingGoogleAdsClient:
         """Run a GAQL read, used to capture state before a mutation."""
         from ..query import assert_select_only
 
+        from ..retry import retry_read
+
         service = self.service("GoogleAdsService")
         target = self.resolve_customer_id(customer_id)
-        rows = []
-        with logdb.record_api_call(
-            "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
-        ) as slot:
-            for batch in service.search_stream(
-                customer_id=target, query=assert_select_only(gaql)
-            ):
-                rows.extend(batch.results)
-            slot["row_count"] = len(rows)
-        return rows
+
+        # Retried: this is a read, even though it lives on the writing client.
+        # mutate() below never is -- see retry.py for why.
+        def run() -> list[Any]:
+            rows: list[Any] = []
+            with logdb.record_api_call(
+                "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
+            ) as slot:
+                for batch in service.search_stream(
+                    customer_id=target, query=assert_select_only(gaql)
+                ):
+                    rows.extend(batch.results)
+                slot["row_count"] = len(rows)
+            return rows
+
+        return retry_read(run)
 
     # -- the one write path ------------------------------------------------
 

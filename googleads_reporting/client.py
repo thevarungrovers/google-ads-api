@@ -208,14 +208,21 @@ class ReadOnlyGoogleAdsClient:
     ) -> list[dict[str, Any]]:
         """Run ``query`` and return flattened dicts, columns in SELECT order.
 
-        Money is already out of micros; enums are already names.
+        Money is already out of micros; enums are already names. Retried on a
+        transient failure (see retry.py) -- safe because the whole result is
+        collected before returning, so a retry never hands back half a stream
+        twice.
         """
+        from .retry import retry_read
+
         gaql = self._to_gaql(query)
         paths = parse_select(gaql)
-        return [
-            row_to_dict(row, paths)
-            for row in self.search_stream(gaql, customer_id=customer_id)
-        ]
+        return retry_read(
+            lambda: [
+                row_to_dict(row, paths)
+                for row in self.search_stream(gaql, customer_id=customer_id)
+            ]
+        )
 
     # -- internals ---------------------------------------------------------
 
