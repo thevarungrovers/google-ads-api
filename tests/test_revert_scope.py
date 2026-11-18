@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from googleads_mcp import ledger
+from googleads_mcp.changes.base import entry_campaigns
 from googleads_mcp.changes.targeting import CampaignLocations, CampaignNetworks
 from kindkit import CUSTOMER, limits, preview_and_apply, rig, row
 
@@ -90,3 +91,39 @@ def test_an_entry_whose_campaign_cannot_be_told_is_refused_under_a_campaign_scop
     with pytest.raises(Exception, match="campaign_in_scope"):
         engine.revert("old1")
     assert client.applied == []
+
+
+def test_an_entry_for_another_in_scope_customer_is_refused_as_not_the_same_customer():
+    """Both accounts are allowed, but the inverse goes to the write client's
+    customer: undoing the other account's change here would hit the wrong one."""
+    engine, client, _ = rig()
+    engine.add(CampaignNetworks())
+    ledger.write_intent(
+        entry_id="other1", tool="apply_campaign_networks", customer_id="9998887777",
+        entity_type="campaign", entity_id="11", entity_name="Example campaign",
+        field_name="networks", before="display_network=off, search_partners=off",
+        after="display_network=off, search_partners=on", projected_delta="29.00",
+        detail={"scope_campaigns": ["11"],
+                "before": {"search_partners": False, "display_network": False},
+                "after": {"search_partners": True, "display_network": False}},
+    )
+    ledger.write_outcome(entry_id="other1", ok=True)
+    engine.ctx.state.limits = limits(allowed_customer_ids=(CUSTOMER, "9998887777"))
+    with pytest.raises(Exception, match="same_customer"):
+        engine.revert("other1")
+    assert client.applied == []
+
+
+def test_a_revert_of_a_revert_is_held_to_the_campaign_scope():
+    engine, client, result = networks_entry()
+    undo = engine.revert(result.entry_id)
+    campaign(client, search_partners=False)
+    assert entry_campaigns(ledger.find_entry(undo.entry_id)) == ["11"]
+    sent = len(client.applied)
+    engine.ctx.state.limits = limits(allowed_campaign_ids=("12",))
+    with pytest.raises(Exception, match="campaign_in_scope"):
+        engine.revert(undo.entry_id)
+    assert len(client.applied) == sent
+    engine.ctx.state.limits = limits(allowed_campaign_ids=("11",))
+    engine.revert(undo.entry_id)
+    assert len(client.applied) == sent + 1
