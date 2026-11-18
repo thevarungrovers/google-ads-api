@@ -87,21 +87,23 @@ def test_an_ad_group_is_created_paused():
 
 
 def test_renaming_round_trips():
-    engine, client, _ = rig()
+    """Our ad group: the prefix is kept, and the revert restores the exact old name."""
+    engine, client, _ = named_rig("AB", "max")
     client.answer("ad_group.id = 22", [row(**{
-        "ad_group.id": 22, "ad_group.name": "General", "campaign.id": 11,
+        "ad_group.id": 22, "ad_group.name": "AB-max-General", "campaign.id": 11,
         "campaign.name": "Example Co - Search - EN",
         "ad_group.resource_name": "customers/1112223333/adGroups/22",
     })])
     kind = engine.add(RenameAdGroup())
-    _, result = preview_and_apply(engine, kind, ad_group_id="22", new_name="Generic")
-    assert client.applied[-1]["operations"][0].update.name == "Generic"
+    preview, result = preview_and_apply(engine, kind, ad_group_id="22", new_name="Generic")
+    assert preview.naming["rule"] == "kept_prefix"
+    assert client.applied[-1]["operations"][0].update.name == "AB-max-Generic"
     client.answer("ad_group.id = 22", [row(**{
-        "ad_group.id": 22, "ad_group.name": "Generic", "campaign.id": 11,
+        "ad_group.id": 22, "ad_group.name": "AB-max-Generic", "campaign.id": 11,
         "ad_group.resource_name": "customers/1112223333/adGroups/22",
     })])
     engine.revert(result.entry_id)
-    assert client.applied[-1]["operations"][0].update.name == "General"
+    assert client.applied[-1]["operations"][0].update.name == "AB-max-General"
 
 
 def test_a_campaign_rename_to_a_taken_name_blocks():
@@ -188,3 +190,104 @@ def test_an_ad_group_is_sent_prefixed(owner, agent, prefix):
     preview, _ = preview_and_apply(engine, kind, campaign_id="11", name="Gifts")
     assert preview.naming["final"] == f"{prefix}Gifts"
     assert client.applied[-1]["operations"][0].create.name == f"{prefix}Gifts"
+
+
+# -- renames: only our own entities ----------------------------------------
+
+
+def campaign_named(client, name, campaign_id=11):
+    client.answer(f"campaign.id = {campaign_id}", [row(**{
+        "campaign.id": campaign_id, "campaign.name": name, "campaign.status": "ENABLED",
+        "campaign.resource_name": f"customers/1112223333/campaigns/{campaign_id}",
+    })])
+
+
+def ledger_created_campaign(campaign_id=11, groups=()):
+    from googleads_mcp import ledger
+
+    ledger.write_intent(
+        entry_id=f"made{campaign_id}", tool="apply_create_campaign", customer_id="1112223333",
+        entity_type="campaign", entity_id="new:x", entity_name="x", field_name="created",
+        before="(none)", after="PAUSED", projected_delta="0",
+        detail={"created_names": [["ad_group", g] for g in groups]},
+    )
+    ledger.write_outcome(entry_id=f"made{campaign_id}", ok=True,
+                         resource_name=f"customers/1112223333/campaigns/{campaign_id}")
+
+
+@pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
+def test_renaming_our_campaign_keeps_the_prefix(owner, agent, prefix):
+    engine, client, _ = named_rig(owner, agent)
+    campaign_named(client, f"{prefix}old")
+    if not prefix:
+        ledger_created_campaign()  # with no prefix, "ours" is the ledger's word
+    kind = engine.add(RenameCampaign())
+    preview, _ = preview_and_apply(engine, kind, campaign_id="11", new_name="spring")
+    assert preview.after == f"{prefix}spring"
+    assert client.applied[-1]["operations"][0].update.name == f"{prefix}spring"
+
+
+@pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
+def test_renaming_a_manual_campaign_is_refused(owner, agent, prefix):
+    engine, client, _ = named_rig(owner, agent)
+    campaign_named(client, "Hand made")
+    kind = engine.add(RenameCampaign())
+    preview = engine.preview(kind, {"campaign_id": "11", "new_name": "spring"})
+    assert failed(preview, "own_entity")
+    assert any("manual entity" in line for line in preview.checks)
+
+
+@pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
+def test_renaming_another_agents_campaign_is_refused(owner, agent, prefix):
+    engine, client, _ = named_rig(owner, agent)
+    campaign_named(client, "CD-bot-launch")
+    kind = engine.add(RenameCampaign())
+    preview = engine.preview(kind, {"campaign_id": "11", "new_name": "spring"})
+    assert failed(preview, "own_entity")
+    assert any("another agent" in line for line in preview.checks)
+
+
+def test_removing_our_prefix_is_not_possible_and_forging_another_is_refused():
+    engine, client, _ = named_rig("AB", "max")
+    campaign_named(client, "AB-max-old")
+    kind = engine.add(RenameCampaign())
+    # A bare base keeps the prefix; there is no way to ask for it gone.
+    assert engine.preview(kind, {"campaign_id": "11", "new_name": "new"}).after == "AB-max-new"
+    with pytest.raises(ValueError, match="another agent's prefix"):
+        engine.preview(kind, {"campaign_id": "11", "new_name": "CD-bot-new"})
+
+
+def test_a_ledger_owned_campaign_that_lost_its_prefix_gets_it_back():
+    engine, client, _ = named_rig("AB", "max")
+    campaign_named(client, "renamed in the UI")
+    ledger_created_campaign()
+    kind = engine.add(RenameCampaign())
+    preview = engine.preview(kind, {"campaign_id": "11", "new_name": "spring"})
+    assert not preview.blocked, preview.checks
+    assert preview.after == "AB-max-spring" and preview.naming["rule"] == "restored_prefix"
+    assert any("restoring the prefix" in w for w in preview.warnings)
+
+
+@pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
+def test_an_ad_group_built_inside_our_campaign_is_ours(owner, agent, prefix):
+    engine, client, _ = named_rig(owner, agent)
+    client.answer("ad_group.id = 22", [row(**{
+        "ad_group.id": 22, "ad_group.name": f"{prefix}General", "campaign.id": 11,
+        "campaign.name": "x", "ad_group.resource_name": "customers/1112223333/adGroups/22",
+    })])
+    ledger_created_campaign(groups=[f"{prefix}General"])
+    kind = engine.add(RenameAdGroup())
+    preview = engine.preview(kind, {"ad_group_id": "22", "new_name": "Generic"})
+    assert not preview.blocked, preview.checks
+    assert preview.after == f"{prefix}Generic"
+
+
+def test_a_manual_ad_group_in_our_campaign_is_not_ours():
+    engine, client, _ = named_rig("", "")
+    client.answer("ad_group.id = 22", [row(**{
+        "ad_group.id": 22, "ad_group.name": "Added by hand", "campaign.id": 11,
+        "campaign.name": "x", "ad_group.resource_name": "customers/1112223333/adGroups/22",
+    })])
+    ledger_created_campaign(groups=["General"])
+    kind = engine.add(RenameAdGroup())
+    assert failed(engine.preview(kind, {"ad_group_id": "22", "new_name": "x"}), "own_entity")

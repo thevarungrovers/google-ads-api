@@ -66,6 +66,22 @@ class WriteContext:
 
         return naming.stamp(self.identity, requested, entity_type=entity_type)
 
+    def name_for_rename(self, entity_type: str, current: str, requested: str, *,
+                        entity_id: str, campaign_id: str | None = None):
+        """The final name for renaming an existing entity: a naming.Stamped.
+
+        Only OUR entities may be renamed -- the live name carries our prefix,
+        or the ledger shows this server created it. Anything else comes back
+        with an ``own_entity`` problem, a FAIL line in the preview.
+        """
+        from googleads_mcp import ledger
+        from googleads_reporting import naming
+
+        owned = naming.owns(self.identity, current) or ledger.created_by_us(
+            entity_type, entity_id, campaign_id=campaign_id, name=current)
+        return naming.rename(self.identity, current, requested, entity_type=entity_type,
+                             ledger_owned=owned)
+
     def target_customer(self) -> str:
         """The customer a write will actually be sent to.
 

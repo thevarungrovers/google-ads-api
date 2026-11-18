@@ -99,6 +99,48 @@ def write_outcome(
     )
 
 
+# --- attribution ------------------------------------------------------------
+
+#: Ledger entity types for the naming entity types.
+_LEDGER_TYPE = {"campaign": "campaign", "ad_group": "ad group"}
+_COLLECTION = {"campaign": "campaigns", "ad_group": "adGroups"}
+
+
+def created_by_us(entity_type: str, entity_id: str, *, campaign_id: str | None = None,
+                  name: str | None = None) -> bool:
+    """Whether this checkout's ledger shows this server created the entity.
+
+    ``entity_type`` is a naming type, "campaign" or "ad_group". Evidence, any
+    of:
+      * an applied creation row whose resource name is this entity's;
+      * for an ad group, an applied create_campaign row for its campaign that
+        lists it, by ``name``, among the names it created;
+      * an applied rename of it recorded WITH a naming identity -- renames
+        with one are only ever allowed on our own entities.
+    """
+    ledger_type = _LEDGER_TYPE.get(entity_type)
+    if ledger_type is None:
+        return False
+    own = f"/{_COLLECTION[entity_type]}/{entity_id}"
+    parent = f"/campaigns/{campaign_id}" if campaign_id else None
+    for entry in entries():
+        if not entry.get("applied"):
+            continue
+        detail = entry.get("detail") or {}
+        resource = entry.get("resource_name") or ""
+        if entry.get("field") == "created":
+            if entry.get("entity_type") == ledger_type and resource.endswith(own):
+                return True
+            if (entity_type == "ad_group" and parent and name
+                    and entry.get("entity_type") == "campaign" and resource.endswith(parent)
+                    and ["ad_group", name] in (detail.get("created_names") or [])):
+                return True
+        elif (entry.get("field") == "name" and entry.get("entity_type") == ledger_type
+              and str(entry.get("entity_id")) == str(entity_id) and "identity" in detail):
+            return True
+    return False
+
+
 # --- migration off the JSONL ----------------------------------------------
 
 

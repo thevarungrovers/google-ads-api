@@ -306,12 +306,19 @@ class RenameCampaign(ChangeKind):
         self,
         ctx,
         campaign_id: Annotated[str, Field(description="From find_campaigns")],
-        new_name: Annotated[str, Field(description="The new name")],
+        new_name: Annotated[str, Field(description="The new BASE name; the prefix is kept")],
     ) -> Proposal:
         """Show what renaming a campaign would do. Writes nothing. A name
         changes nothing about delivery; reports keyed on the old name will
-        stop matching it."""
+        stop matching it.
+
+        Only the agent's OWN campaigns can be renamed: one whose name carries
+        this server's prefix, or that the ledger shows it created. The prefix
+        is kept (or put back); only the base changes."""
         row = campaigns.find(ctx.client, campaign_id=campaign_id)
+        stamped = ctx.name_for_rename("campaign", row.campaign.name, new_name,
+                                      entity_id=str(row.campaign.id))
+        new_name = stamped.final
         taken = _campaign_named(ctx, new_name)
         return Proposal(
             entity_type="campaign", entity_id=str(row.campaign.id), entity_name=row.campaign.name,
@@ -319,7 +326,7 @@ class RenameCampaign(ChangeKind):
             checks=[Check("name_is_free", taken == NOTHING,
                           "no campaign has this name" if taken == NOTHING else taken)],
             projected=Decimal("0"), campaign_id=str(row.campaign.id),
-            payload={"campaign_id": str(row.campaign.id)},
+            payload={"campaign_id": str(row.campaign.id)}, names=[stamped],
         )
 
     def current(self, ctx, payload):
@@ -348,10 +355,19 @@ class RenameAdGroup(ChangeKind):
         self,
         ctx,
         ad_group_id: Annotated[str, Field(description="From find_ad_groups")],
-        new_name: Annotated[str, Field(description="Unique within its campaign")],
+        new_name: Annotated[str, Field(description="The new BASE name, unique within its "
+                                       "campaign; the prefix is kept")],
     ) -> Proposal:
-        """Show what renaming an ad group would do. Writes nothing."""
+        """Show what renaming an ad group would do. Writes nothing.
+
+        Only the agent's OWN ad groups can be renamed: one whose name carries
+        this server's prefix, or that the ledger shows it created. The prefix
+        is kept (or put back); only the base changes."""
         row = adgroups.find(ctx.client, ad_group_id=ad_group_id)
+        stamped = ctx.name_for_rename("ad_group", row.ad_group.name, new_name,
+                                      entity_id=str(row.ad_group.id),
+                                      campaign_id=str(row.campaign.id))
+        new_name = stamped.final
         taken = CreateAdGroup._named(ctx, str(row.campaign.id), new_name)
         return Proposal(
             entity_type="ad group", entity_id=str(row.ad_group.id), entity_name=row.ad_group.name,
@@ -360,7 +376,7 @@ class RenameAdGroup(ChangeKind):
             checks=[Check("name_is_free", taken == NOTHING,
                           "free in this campaign" if taken == NOTHING else taken)],
             projected=Decimal("0"), campaign_id=str(row.campaign.id),
-            payload={"ad_group_id": str(row.ad_group.id)},
+            payload={"ad_group_id": str(row.ad_group.id)}, names=[stamped],
         )
 
     def current(self, ctx, payload):
