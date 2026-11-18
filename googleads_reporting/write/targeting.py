@@ -29,20 +29,36 @@ def modifier_from_pct(pct: Decimal) -> float:
     return float((Decimal("100") + pct) / Decimal("100"))
 
 
-def pct_from_modifier(modifier: float | None) -> Decimal:
-    """1.2 -> +20. An unset modifier (0 on the wire for 'not set') is 0%.
+def modifier_of(criterion: Any) -> float | None:
+    """A criterion's bid_modifier, or None when it has none set.
 
-    Google reports an absent modifier as 0.0, which is ALSO how "-100%" is
-    written. Criteria returned with no modifier are treated as unset (0%);
-    this module never writes 0.0 itself unless asked for -100.
+    ``bid_modifier`` is an ``optional`` field, so presence is the only way to
+    tell "no modifier" from 0.0 -- and 0.0 is "-100%", i.e. EXCLUDED. Reading
+    the bare attribute returns 0.0 for both.
     """
-    if not modifier:
+    return criterion.bid_modifier if "bid_modifier" in criterion else None
+
+
+def pct_from_modifier(modifier: float | None) -> Decimal:
+    """1.2 -> +20. 0.0 -> -100 (excluded). None (unset) -> 0.
+
+    Pass :func:`modifier_of`, never the bare attribute: an unset modifier reads
+    as 0.0 on the message, which is also how an exclusion is written.
+    """
+    if modifier is None:
         return Decimal("0")
     return (Decimal(str(modifier)) * 100 - 100).quantize(Decimal("1"))
 
 
 def render_pct(pct: Decimal) -> str:
-    return f"{pct:+.0f}%"
+    """"+20%". -100 is spelled out, because it means "never show here"."""
+    rendered = f"{pct:+.0f}%"
+    return f"{rendered} (excluded)" if pct <= -100 else rendered
+
+
+def pct_of(rendered: str) -> Decimal:
+    """The number back off a :func:`render_pct` string: "-100% (excluded)" -> -100."""
+    return Decimal(rendered.split("%", 1)[0].strip())
 
 
 def criterion_spec_label(spec: dict[str, Any]) -> str:

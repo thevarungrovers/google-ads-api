@@ -17,7 +17,7 @@ from googleads_mcp.changes.common import CreatesRemovable, campaign_headroom, on
 from googleads_mcp.guardrails import Check
 from googleads_reporting.query import Query
 from googleads_reporting.write import adgroups, campaigns, criteria, targeting
-from googleads_reporting.write.targeting import pct_from_modifier, render_pct
+from googleads_reporting.write.targeting import modifier_of, pct_from_modifier, pct_of, render_pct
 
 
 def parse_pct(raw: str, name: str = "bid_modifier_pct") -> Decimal:
@@ -38,6 +38,30 @@ def modifier_check(ctx, pct: Decimal) -> Check:
     ceiling = ctx.limits.max_bid_modifier_pct
     return Check("max_bid_modifier_pct", abs(float(pct)) <= ceiling,
                  f"{render_pct(pct)} against +/-{ceiling:.0f}%")
+
+
+def _modifier_pct(criterion) -> Decimal:
+    """A criterion's modifier as a percentage, -100 when it is EXCLUDED."""
+    return pct_from_modifier(modifier_of(criterion))
+
+
+def modifier_projection(ctx, campaign_id: str, before: Decimal, after: Decimal,
+                        where: str) -> tuple[Decimal, str, list[str]]:
+    """(projected, note, warnings) for moving a modifier from ``before`` to ``after`` %.
+
+    Leaving -100% is an UN-exclusion: the campaign starts serving somewhere it
+    never did, bounded only by its unused budget.
+    """
+    if before <= -100 < after:
+        projected, note = campaign_headroom(ctx, campaign_id)
+        return projected, note, [
+            f"{where} is EXCLUDED today (-100%); this resumes serving there, "
+            "up to the campaign's unused budget"
+        ]
+    if after > 0:
+        projected, note = campaign_headroom(ctx, campaign_id)
+        return projected, note, []
+    return Decimal("0"), "A cut can only reduce spend.", []
 
 
 def _campaign(ctx, campaign_id: str):
@@ -273,7 +297,7 @@ class DeviceBidModifier(ChangeKind):
         """(rendered modifier or NOTHING, criterion_id)."""
         for r in _criteria(ctx, campaign_id, "DEVICE", ("campaign_criterion.device.type",)):
             if r.campaign_criterion.device.type_.name == device:
-                return (render_pct(pct_from_modifier(r.campaign_criterion.bid_modifier)),
+                return (render_pct(_modifier_pct(r.campaign_criterion)),
                         str(r.campaign_criterion.criterion_id))
         return NOTHING, None
 
@@ -292,14 +316,15 @@ class DeviceBidModifier(ChangeKind):
         pct = parse_pct(bid_modifier_pct)
         row = _campaign(ctx, campaign_id)
         before, criterion_id = self._state(ctx, campaign_id, device)
-        projected, note = (campaign_headroom(ctx, campaign_id) if pct > 0
-                           else (Decimal("0"), "A cut can only reduce spend."))
+        before_pct = Decimal("0") if before == NOTHING else pct_of(before)
+        projected, note, warnings = modifier_projection(ctx, campaign_id, before_pct, pct,
+                                                        device)
         return Proposal(
             entity_type="campaign", entity_id=f"{campaign_id}~{device}",
             entity_name=f"{row.campaign.name} on {device}", path=row.campaign.name,
             field_name="device_bid_modifier", before=before, after=render_pct(pct),
             checks=[modifier_check(ctx, pct)], projected=projected,
-            campaign_id=str(row.campaign.id), note=note,
+            campaign_id=str(row.campaign.id), note=note, warnings=warnings,
             items=[LedgerItem("campaign", f"{campaign_id}~{device}",
                               f"{row.campaign.name} on {device}", "device_bid_modifier",
                               before, render_pct(pct),
@@ -338,7 +363,7 @@ class DeviceBidModifier(ChangeKind):
             ctx, detail["campaign_id"], detail["device"])[1]
         return targeting.plan_set_campaign_criterion_modifier(
             ctx.client, campaign_id=detail["campaign_id"], criterion_id=criterion_id,
-            pct=Decimal(entry["before"].rstrip("%")),
+            pct=pct_of(entry["before"]),
         )
 
 
@@ -375,22 +400,22 @@ class LocationBidModifier(ChangeKind):
         pct = parse_pct(bid_modifier_pct)
         found = self._row(ctx, campaign_id, criterion_id)
         geo = found.campaign_criterion.location.geo_target_constant
-        projected, note = (campaign_headroom(ctx, campaign_id) if pct > 0
-                           else (Decimal("0"), "A cut can only reduce spend."))
+        before_pct = _modifier_pct(found.campaign_criterion)
+        projected, note, warnings = modifier_projection(ctx, campaign_id, before_pct, pct,
+                                                        f"location {geo}")
         return Proposal(
             entity_type="location", entity_id=f"{campaign_id}~{criterion_id}",
             entity_name=f"{geo} on {found.campaign.name}", path=found.campaign.name,
             field_name="bid_modifier",
-            before=render_pct(pct_from_modifier(found.campaign_criterion.bid_modifier)),
+            before=render_pct(before_pct),
             after=render_pct(pct), checks=[modifier_check(ctx, pct)], projected=projected,
-            campaign_id=str(campaign_id), note=note,
+            campaign_id=str(campaign_id), note=note, warnings=warnings,
             payload={"campaign_id": str(campaign_id), "criterion_id": str(criterion_id),
                      "pct": str(pct)},
         )
 
     def _rendered(self, ctx, campaign_id, criterion_id):
-        return render_pct(pct_from_modifier(
-            self._row(ctx, campaign_id, criterion_id).campaign_criterion.bid_modifier))
+        return render_pct(_modifier_pct(self._row(ctx, campaign_id, criterion_id).campaign_criterion))
 
     def current(self, ctx, payload):
         return self._rendered(ctx, payload["campaign_id"], payload["criterion_id"])
@@ -408,7 +433,7 @@ class LocationBidModifier(ChangeKind):
         campaign_id, criterion_id = entry["entity_id"].split("~")
         return targeting.plan_set_campaign_criterion_modifier(
             ctx.client, campaign_id=campaign_id, criterion_id=criterion_id,
-            pct=Decimal(entry["before"].rstrip("%")),
+            pct=pct_of(entry["before"]),
         )
 
 

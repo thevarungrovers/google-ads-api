@@ -194,3 +194,72 @@ def test_audiences_are_added_only_in_the_ad_groups_own_mode():
     preview = engine.preview(kind, {"ad_group_id": "22", "user_list_ids": ["45"],
                                     "mode": "targeting"})
     assert failed(preview, "mode_matches")
+
+
+# ---------------------------------------------------------------------------
+# A bid_modifier of 0.0 is -100%: EXCLUDED, not "no modifier"
+# ---------------------------------------------------------------------------
+
+
+def test_pct_from_modifier_tells_unset_from_excluded():
+    from googleads_reporting.write.targeting import modifier_of, pct_from_modifier
+
+    unset = row(**{"campaign_criterion.criterion_id": 1}).campaign_criterion
+    excluded = row(**{"campaign_criterion.criterion_id": 1,
+                      "campaign_criterion.bid_modifier": 0.0}).campaign_criterion
+    assert modifier_of(unset) is None
+    assert pct_from_modifier(modifier_of(unset)) == Decimal("0")
+    assert modifier_of(excluded) == 0.0
+    assert pct_from_modifier(modifier_of(excluded)) == Decimal("-100")
+
+
+def test_an_excluded_device_is_an_unexclusion_and_reverts_to_the_exclusion():
+    engine, client, _ = rig()
+    campaign(client)
+    criteria_rows(client, "DEVICE", [row(**{
+        "campaign_criterion.criterion_id": 30002, "campaign_criterion.bid_modifier": 0.0,
+        "campaign_criterion.device.type_": "TABLET",
+    })])
+    kind = engine.add(DeviceBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "device": "TABLET",
+                                    "bid_modifier_pct": "-50"})
+    assert preview.before == "-100% (excluded)"
+    assert Decimal(preview.projected_daily_spend_delta) == Decimal("29.00")
+    assert any("resumes serving" in w for w in preview.warnings)
+    result = engine.apply(kind, preview.preview_token)
+
+    criteria_rows(client, "DEVICE", [row(**{
+        "campaign_criterion.criterion_id": 30002, "campaign_criterion.bid_modifier": 0.5,
+        "campaign_criterion.device.type_": "TABLET",
+    })])
+    engine.revert(result.entry_id)
+    op = client.applied[-1]["operations"][0]
+    assert "bid_modifier" in op.update and op.update.bid_modifier == 0.0
+    assert list(op.update_mask.paths) == ["bid_modifier"]
+
+
+def excluded_location(client, modifier=0.0):
+    client.answer("campaign_criterion.criterion_id = 1000", [row(**{
+        "campaign_criterion.criterion_id": 1000, "campaign_criterion.type_": "LOCATION",
+        "campaign_criterion.negative": False, "campaign_criterion.bid_modifier": modifier,
+        "campaign_criterion.location.geo_target_constant": "geoTargetConstants/1000",
+        "campaign.name": "Brand - Search - EN",
+    })])
+
+
+def test_an_excluded_location_is_an_unexclusion_and_reverts_to_the_exclusion():
+    engine, client, _ = rig()
+    campaign(client)
+    excluded_location(client)
+    kind = engine.add(LocationBidModifier())
+    preview = engine.preview(kind, {"campaign_id": "11", "criterion_id": "1000",
+                                    "bid_modifier_pct": "-50"})
+    assert preview.before == "-100% (excluded)"
+    assert Decimal(preview.projected_daily_spend_delta) == Decimal("29.00")
+    assert any("resumes serving" in w for w in preview.warnings)
+    result = engine.apply(kind, preview.preview_token)
+
+    excluded_location(client, modifier=0.5)
+    engine.revert(result.entry_id)
+    op = client.applied[-1]["operations"][0]
+    assert "bid_modifier" in op.update and op.update.bid_modifier == 0.0
