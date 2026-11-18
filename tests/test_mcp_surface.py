@@ -466,3 +466,16 @@ def test_only_whole_entities_weigh_three():
              if k.name in ("add_keywords", "add_sitelinks", "add_callouts",
                            "add_structured_snippets")}
     assert set(light.values()) == {1}, light
+
+
+def test_every_kind_that_creates_a_named_entity_declares_creates_named():
+    """The engine's prefix backstop only runs for kinds that declare what they
+    name, so a creating kind that forgot would ship unprefixed. Read off the
+    ledger keys: a kind that records a creation of a named type must say so."""
+    from googleads_mcp.changes import all_kinds
+
+    named = {"campaign": "campaign", "ad group": "ad_group", "label": "label"}
+    for kind in all_kinds():
+        made = {named[t] for t, f in kind.ledger_keys if f in ("created", "create") and t in named}
+        assert made <= set(kind.creates_named), (kind.name, made, kind.creates_named)
+
