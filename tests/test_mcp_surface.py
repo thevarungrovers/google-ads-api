@@ -53,6 +53,14 @@ PREVIEW_TOOLS = frozenset({
     # bidding and budgets
     "preview_bidding_strategy",
     "preview_shared_budget_amount",
+    # targeting
+    "preview_campaign_locations",
+    "preview_campaign_languages",
+    "preview_ad_schedule",
+    "preview_device_bid_modifier",
+    "preview_location_bid_modifier",
+    "preview_audience_targeting",
+    "preview_campaign_networks",
 })
 
 APPLY_TOOLS = frozenset({
@@ -70,6 +78,14 @@ APPLY_TOOLS = frozenset({
     # bidding and budgets
     "apply_bidding_strategy",
     "apply_shared_budget_amount",
+    # targeting
+    "apply_campaign_locations",
+    "apply_campaign_languages",
+    "apply_ad_schedule",
+    "apply_device_bid_modifier",
+    "apply_location_bid_modifier",
+    "apply_audience_targeting",
+    "apply_campaign_networks",
     "revert_change",
 })
 

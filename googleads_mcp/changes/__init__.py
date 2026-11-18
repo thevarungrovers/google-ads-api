@@ -16,6 +16,15 @@ def all_kinds() -> list[ChangeKind]:
     from googleads_mcp.changes.adgroups import AdGroupCpcBid, AdGroupStatus
     from googleads_mcp.changes.bidding import BiddingStrategy, SharedBudgetAmount
     from googleads_mcp.changes.campaigns import CampaignDailyBudget, CampaignStatus
+    from googleads_mcp.changes.targeting import (
+        AdSchedule,
+        AudienceTargeting,
+        CampaignLanguages,
+        CampaignLocations,
+        CampaignNetworks,
+        DeviceBidModifier,
+        LocationBidModifier,
+    )
     from googleads_mcp.changes.keywords import (
         AddKeywords,
         AddNegativeKeywords,
@@ -40,6 +49,14 @@ def all_kinds() -> list[ChangeKind]:
         # bidding and budgets
         BiddingStrategy(),
         SharedBudgetAmount(),
+        # targeting
+        CampaignLocations(),
+        CampaignLanguages(),
+        AdSchedule(),
+        DeviceBidModifier(),
+        LocationBidModifier(),
+        AudienceTargeting(),
+        CampaignNetworks(),
     ]
 
 

@@ -90,6 +90,13 @@ SAFE_TOOLS = (
     "preview_link_shared_negative_list",
     "preview_bidding_strategy",
     "preview_shared_budget_amount",
+    "preview_campaign_locations",
+    "preview_campaign_languages",
+    "preview_ad_schedule",
+    "preview_device_bid_modifier",
+    "preview_location_bid_modifier",
+    "preview_audience_targeting",
+    "preview_campaign_networks",
 )
 
 #: The tools that move real money. Never allowlisted, by any answer to anything.
@@ -107,6 +114,13 @@ WRITE_TOOLS = (
     "apply_link_shared_negative_list",
     "apply_bidding_strategy",
     "apply_shared_budget_amount",
+    "apply_campaign_locations",
+    "apply_campaign_languages",
+    "apply_ad_schedule",
+    "apply_device_bid_modifier",
+    "apply_location_bid_modifier",
+    "apply_audience_targeting",
+    "apply_campaign_networks",
 )
 
 READ_ONLY_ENV = "GOOGLE_ADS_MCP_READ_ONLY"
