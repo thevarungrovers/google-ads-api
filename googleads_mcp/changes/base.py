@@ -488,6 +488,11 @@ class ChangeKind:
             return False
         return reapplies_change(entry)
 
+    def revert_refusal(self, entry: dict[str, Any]) -> str | None:
+        """Why ``entry`` cannot be reverted at all, checked before anything
+        else the revert does (staleness, the limits); None when it can."""
+        return None
+
     def inverse_detail(self, detail: dict[str, Any]) -> dict[str, Any]:
         """The ``detail`` for a revert's own row, given the reverted row's.
 

@@ -440,6 +440,8 @@ class Engine:
         kind = self.kind_for_entry(entry)
         if not kind.revertible:
             kind.inverse(ctx, entry)  # raises, with the kind's own reason
+        if (refusal := kind.revert_refusal(entry)) is not None:
+            raise ValueError(refusal)
         self._not_stale(kind, entry)
         # Then the SPEND half, now that we know what undoing this restores:
         # reverting a pause, a cut or any other narrowing change (a network
@@ -497,6 +499,8 @@ class Engine:
             kinds.append(kind)
             if not kind.revertible:
                 kind.inverse(ctx, entry)
+            if (refusal := kind.revert_refusal(entry)) is not None:
+                raise ValueError(refusal)
             self._not_stale(kind, entry)
             narrowed = kind.narrowed_for(entry)
             default = type(kind).revert_projection is ChangeKind.revert_projection

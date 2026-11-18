@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from googleads_mcp.changes.base import NOTHING, ChangeKind, money
+from googleads_mcp.changes.base import NOTHING, ChangeKind, money, undone_change
 from googleads_reporting.query import Query, last_n_days, quote_literal
 from googleads_reporting.write import campaigns, criteria
 
@@ -64,7 +64,9 @@ class CreatesRemovable(ChangeKind):
     Its ledger rows have field "created", before NOTHING and after the status
     the thing was created with (or "present"). Reverting one removes exactly
     the resource Google returned for it -- see criteria.plan_remove_created --
-    and refuses a row that has no resource name recorded.
+    and refuses a row that has no resource name recorded. Reverting THAT
+    revert is refused: the thing is gone, and adding it again is a new
+    preview_<kind>, not a second REMOVE.
     """
 
     #: GAQL resource and status field used to read a created row back.
@@ -82,7 +84,20 @@ class CreatesRemovable(ChangeKind):
             ctx, self.resource_for(entry), entry["resource_name"], self.status_field
         )
 
+    def revert_refusal(self, entry: dict[str, Any]) -> str | None:
+        """A REVERT's row -- the removal of what was created -- is not undone
+        here: re-creating it is a new creation, with its own preview and
+        checks, and inverting it would only send a second REMOVE."""
+        if undone_change(entry) is None and entry.get("tool") != "revert_change":
+            return None
+        return (
+            f"Entry {entry.get('entry_id')} removed what an earlier change created: this "
+            f"was already removed; add it again with preview_{self.name}."
+        )
+
     def inverse(self, ctx, entry: dict[str, Any]):
+        if (refusal := self.revert_refusal(entry)) is not None:
+            raise ValueError(refusal)
         if not entry.get("resource_name"):
             raise ValueError(
                 f"Entry {entry['entry_id']} has no resource name recorded, so it cannot "

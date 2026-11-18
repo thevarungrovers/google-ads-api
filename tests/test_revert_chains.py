@@ -305,10 +305,11 @@ def test_first_schedule_windows_with_a_raised_modifier_reapply_at_headroom():
     row_ = ledger.find_entry(undo.entry_id)
     assert kind.revert_projection(engine.ctx, row_)[0] == HEADROOM
     assert kind.reapplies(row_)
-    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
+    # Re-creating it through revert is refused outright (a second REMOVE
+    # otherwise); the projection above is what a re-application would cost.
     client.answer("campaign_criterion.resource_name =", [])
     sent = len(client.applied)
-    with pytest.raises(Exception, match="projected_delta_per_day"):
+    with pytest.raises(Exception, match="already removed"):
         engine.revert(undo.entry_id)
     assert len(client.applied) == sent
 
@@ -333,10 +334,9 @@ def test_location_add_and_exclude_reapply_at_headroom():
     rows = [ledger.find_entry(e) for e in undo.entry_ids]
     assert all(kind.revert_projection(engine.ctx, r)[0] == HEADROOM for r in rows)
     assert all(kind.reapplies(r) for r in rows)
-    engine.ctx.state.limits = limits(max_projected_delta_per_day=Decimal("10"))
     client.answer("campaign_criterion.resource_name =", [])
     sent = len(client.applied)
-    with pytest.raises(Exception, match="projected_delta_per_day"):
+    with pytest.raises(Exception, match="already removed"):
         engine.revert(undo.batch_id)
     assert len(client.applied) == sent
 
@@ -508,3 +508,44 @@ def test_a_revert_row_without_the_parity_flag_is_read_off_the_ledger():
     orphan["detail"]["undoes"]["entry_id"] = "gone"
     # The undone row is gone: held to the limit, since it would put a widening back.
     assert kind.reapplies(orphan)
+
+
+# -- a created criterion: its removal is not undone by a second REMOVE ---------
+
+
+def test_reverting_the_removal_of_a_created_criterion_is_refused():
+    """Reverting the revert used to send plan_remove_created for the same,
+    already removed, resource: a second REMOVE."""
+    from googleads_mcp.changes.targeting import AdSchedule
+
+    engine, client, _ = rig()
+    campaign(client)
+    kind = engine.add(AdSchedule())
+    _, result = preview_and_apply(engine, kind, campaign_id="11", windows=[
+        {"day": "MONDAY", "start_hour": 8, "end_hour": 20}])
+    created_criterion_present(client)
+    undo = engine.revert(result.entry_id)
+    client.answer("campaign_criterion.resource_name =", [])
+    sent = len(client.applied)
+    with pytest.raises(ValueError, match="already removed; add it again with preview_ad_schedule"):
+        engine.revert(undo.entry_id)
+    assert len(client.applied) == sent
+    with pytest.raises(ValueError, match="already removed"):
+        kind.inverse(engine.ctx, ledger.find_entry(undo.entry_id))
+
+
+def test_reverting_the_batch_removal_of_created_criteria_is_refused():
+    from googleads_mcp.changes.targeting import CampaignLocations
+
+    engine, client, _ = rig()
+    campaign(client)
+    kind = engine.add(CampaignLocations())
+    _, result = preview_and_apply(engine, kind, campaign_id="11", add=["3000", "4000"])
+    created_criterion_present(client)
+    undo = engine.revert(result.batch_id)
+    assert undo.batch_id
+    client.answer("campaign_criterion.resource_name =", [])
+    sent = len(client.applied)
+    with pytest.raises(ValueError, match="already removed; add it again with preview_campaign_locations"):
+        engine.revert(undo.batch_id)
+    assert len(client.applied) == sent

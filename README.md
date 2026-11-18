@@ -264,7 +264,8 @@ keeps the old ad's status.
 Removing campaigns, ad groups, ads or budgets, or setting anything to REMOVED
 -- pausing is the undo. (The one narrow exception: undoing a keyword, negative,
 location or link **the server itself added** removes exactly that criterion,
-traced through its own ledger.) Anything touching billing, account access or
+traced through its own ledger. That removal is not itself reverted: to have
+the criterion back, add it again with its `preview_*` tool.) Anything touching billing, account access or
 conversion-action settings -- those are not on the write client's allowlist at
 all. Video campaigns, which Google's API refuses to create.
 
