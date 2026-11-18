@@ -112,8 +112,8 @@ touch. What that means depends on the agent:
 
 | Agent | Saying Y does this |
 |---|---|
-| Claude Code | The 10 safe tools stop asking permission. The 5 that change things still ask, every time |
-| Claude Desktop, Cursor, Codex | The 5 tools that change things are not even given to the agent. It cannot call them |
+| Claude Code | The 53 safe tools (reads and previews) stop asking permission. The 32 that change things still ask, every time |
+| Claude Desktop, Cursor, Codex | The 32 tools that change things are not even given to the agent. It cannot call them |
 
 That difference is not a preference — Claude Code is the only one of the four
 that can be told "allow this tool, ask about that one". For the others the
@@ -215,7 +215,7 @@ rejected change costs an error message instead of a half-made edit.
 
 ## What the agent can do
 
-**85 tools: 26 that read, 29 preview/apply pairs, and undo.** The full,
+**85 tools: 22 that read, 31 preview/apply pairs, and undo.** The full,
 pinned list is in `tests/test_mcp_surface.py`; `.claude/skills/google-ads/SKILL.md`
 describes each.
 
@@ -248,8 +248,12 @@ Each is a `preview_*` / `apply_*` pair.
 | Low-risk edits | Labels, final URL suffix, tracking template, dismissing a recommendation (one tool, closed allowlist) |
 | Undo | `revert_change` -- one entry, or a whole batch |
 
-Every creation starts **PAUSED** and costs 3 changes against the limits, so
-going live is always a separate approval.
+A new campaign, ad group or responsive search ad starts **PAUSED** and costs 3
+changes against the limits, so going live is a separate approval. Keywords cost
+1 and start paused unless the preview asked for them enabled. Sitelinks,
+callouts and structured snippets cost 1 and are **live as soon as they are
+linked** -- assets have no paused state. An "edited" RSA costs 3 and its new ad
+keeps the old ad's status.
 
 ### Cannot do at all
 

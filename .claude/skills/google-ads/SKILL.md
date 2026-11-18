@@ -97,7 +97,7 @@ it does.
 | `shared_budget_amount` | A shared budget; lists every campaign it feeds |
 | `ad_group_cpc_bid`, `keyword_cpc_bid` | Max CPC; warns when automated bidding ignores it |
 | `bidding_strategy` | Manual CPC / Max clicks / Max conversions (tCPA) / Max value (tROAS); resets learning |
-| `add_keywords` | Batch, one match type, created PAUSED |
+| `add_keywords` | Batch, one match type; PAUSED unless `enabled=true` (then serving at once); 1 apply |
 | `add_negative_keywords` | Campaign or ad group level, batch; immediate |
 | `add_to_shared_negative_list`, `link_shared_negative_list` | Shared negative lists |
 | `campaign_locations`, `campaign_languages`, `ad_schedule` | Targeting; the first one on a campaign narrows it |
@@ -105,10 +105,11 @@ it does.
 | `campaign_networks` | Search Partners, Display expansion |
 | `audience_targeting` | User lists on an ad group, in its current mode |
 | `create_responsive_search_ad` | PAUSED; 3 applies |
-| `replace_responsive_search_ad` | "Edit" an RSA: new ad + pause old, one request |
-| `add_sitelinks`, `add_callouts`, `add_structured_snippets` | Asset + link, atomic |
+| `replace_responsive_search_ad` | "Edit" an RSA: new ad (keeps the old ad's status) + pause old, one request; 3 applies |
+| `add_sitelinks`, `add_callouts`, `add_structured_snippets` | Asset + link, atomic; LIVE once linked (no paused state); 1 apply |
 | `create_campaign` | Whole Search/Display campaign, everything PAUSED; 3 applies |
-| `create_ad_group`, `rename_campaign`, `rename_ad_group` | |
+| `create_ad_group` | PAUSED; 3 applies |
+| `rename_campaign`, `rename_ad_group` | |
 | `recommendation` | A Google recommendation, through the matching typed change |
 | `low_risk_change` | Labels, URL suffix, tracking template, dismiss a recommendation |
 

@@ -89,14 +89,14 @@ WHAT YOU CAN CHANGE (each a preview_X / apply_X pair)
   status         campaign_status, ad_group_status, keyword_status, ad_status
   money          campaign_daily_budget, shared_budget_amount, ad_group_cpc_bid,
                  keyword_cpc_bid, bidding_strategy (resets Google's learning)
-  keywords       add_keywords (created PAUSED), add_negative_keywords,
+  keywords       add_keywords (PAUSED unless enabled), add_negative_keywords,
                  add_to_shared_negative_list, link_shared_negative_list
   targeting      campaign_locations, campaign_languages, ad_schedule,
                  device_bid_modifier, location_bid_modifier, campaign_networks,
                  audience_targeting
   ads, assets    create_responsive_search_ad (PAUSED), replace_responsive_
                  search_ad (new ad + pause old, one request), add_sitelinks,
-                 add_callouts, add_structured_snippets
+                 add_callouts, add_structured_snippets (assets link LIVE)
   creation       create_campaign (everything PAUSED; the EU political
                  advertising declaration is required -- ASK the human),
                  create_ad_group (PAUSED), rename_campaign, rename_ad_group
@@ -106,7 +106,8 @@ WHAT YOU CAN CHANGE (each a preview_X / apply_X pair)
                  recommendation -- a closed allowlist; nothing that spends
 
 NOTHING IS EVER REMOVED. No status is ever set to REMOVED; pausing is the undo.
-Created campaigns, ad groups and ads start PAUSED and are never removed here.
+Created campaigns, ad groups and ads start PAUSED and are never removed here
+(a replaced RSA's new ad keeps the old ad's status; asset links are live).
 The one exception: reverting a keyword, negative, location, link or asset link
 THIS server added removes exactly that criterion, traced through the ledger.
 Billing, account access and conversion-action edits are not reachable.

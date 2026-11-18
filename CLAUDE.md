@@ -32,7 +32,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
   group, ad or budget is removed. Pausing is the undo. The only removal path is
   `write/criteria.plan_remove_created`, used by `revert_change` to undo a
   criterion/link this server created, traced through the ledger.
-- **Created things start PAUSED** and cost 3 applies.
+- **Whole entities are created PAUSED** and cost 3 applies: a campaign, an
+  ad group, a responsive search ad (an "edited" RSA also costs 3; its new ad
+  takes the old one's status). `add_keywords` costs 1 and is PAUSED unless
+  previewed with `enabled=True`. Asset adds (sitelinks, callouts, snippets)
+  cost 1 and link LIVE -- they have no paused state.
 - **Only `googleads_reporting/write/` may mutate.** `tests/test_readonly_guard.py`
   scans every other file for a `mutate*` call or string.
 - **`ALLOWED_MUTATE_SERVICES`** (`write/client.py`) is pinned as a whole set in
@@ -62,7 +66,7 @@ ledger, `validate_only` in every preview.
    allowlist).
 2. Subclass `ChangeKind` in `googleads_mcp/changes/`:
    - `name` -> `preview_<name>` / `apply_<name>`; titles; `apply_annotations`;
-     `weight` (3 for a creation); `ledger_keys` = the (entity_type, field)
+     `weight` (3 for a whole new entity); `ledger_keys` = the (entity_type, field)
      pairs its ledger rows use.
    - `propose(self, ctx, ...)` -- its parameters ARE the preview tool's schema;
      annotate each with `Annotated[..., Field(description=...)]`; the docstring

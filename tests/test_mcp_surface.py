@@ -442,3 +442,27 @@ def test_the_read_passthrough_cannot_write(tools):
     assert tools["run_gaql"].annotations.read_only_hint is True
     assert tools["run_gaql"].annotations.destructive_hint is False
     assert READ_PASSTHROUGH <= READ_TOOLS
+
+
+def test_the_readme_counts_the_real_tool_split():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert len(APPLY_TOOLS) == len(PREVIEW_TOOLS) + 1  # the pairs, plus revert_change
+    assert (
+        f"**{len(EXPECTED)} tools: {len(READ_TOOLS)} that read, "
+        f"{len(PREVIEW_TOOLS)} preview/apply pairs, and undo.**"
+    ) in readme
+
+
+def test_only_whole_entities_weigh_three():
+    """The docs say which creations cost 3 applies; keep them honest."""
+    from googleads_mcp.changes import all_kinds
+
+    heavy = {k.name for k in all_kinds() if k.weight == 3}
+    assert heavy == {"create_campaign", "create_ad_group", "create_responsive_search_ad",
+                     "replace_responsive_search_ad"}
+    light = {k.name: k.weight for k in all_kinds()
+             if k.name in ("add_keywords", "add_sitelinks", "add_callouts",
+                           "add_structured_snippets")}
+    assert set(light.values()) == {1}, light

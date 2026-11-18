@@ -291,8 +291,10 @@ class DailyUsage:
     process restarted ten times today -- see the same numbers.
 
     A batch counts once (rows share a batch_id and each carries the whole
-    batch's delta and weight), a revert counts as one apply with zero delta,
-    and a reduction refunds nothing, exactly as in SessionCounters.
+    batch's delta and weight), a revert counts as one apply carrying the
+    spend it RESTORES (undoing a pause, a cut or any narrowing change puts
+    delivery back, so its delta is that, not zero), and a reduction refunds
+    nothing, exactly as in SessionCounters.
     """
 
     def __init__(self, limits: Limits) -> None:

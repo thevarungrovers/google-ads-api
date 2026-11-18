@@ -28,10 +28,14 @@ NOT EXPOSED, deliberately:
   - anything touching billing, account access or conversion actions -- those
     services are not on the write client's allowlist at all.
 
-Creation IS exposed (campaigns, ad groups, RSAs, keywords, assets), on three
-conditions: everything starts PAUSED, each creation costs 3 applies, and the
-EU political advertising declaration is a required argument shown in the
-preview.
+Creation IS exposed (campaigns, ad groups, RSAs, keywords, assets). A whole
+campaign, an ad group and a responsive search ad are created PAUSED and cost 3
+applies each; an "edited" RSA (replace_responsive_search_ad) also costs 3, and
+its new ad takes the old ad's status. add_keywords costs 1 and creates PAUSED
+unless the preview asked for enabled=True, in which case they serve at once.
+Sitelinks, callouts and structured snippets cost 1 and are linked LIVE --
+assets have no paused state. The EU political advertising declaration is a
+required argument shown in the campaign preview.
 
 Enforcement is structural: there is no generic ``mutate(resource, body)``
 passthrough, so an unregistered operation is unreachable rather than merely
