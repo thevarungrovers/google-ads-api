@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .campaigns import set_run_dates
 from .client import MutatingGoogleAdsClient
 from .media import (
     LANDSCAPE,
@@ -119,10 +120,7 @@ def build(
         client.raw.copy_from(campaign.target_cpm, client.get_type("TargetCpm"))
     else:
         campaign.manual_cpc.enhanced_cpc_enabled = False
-    if spec.start_date:
-        campaign.start_date = spec.start_date.replace("-", "")
-    if spec.end_date:
-        campaign.end_date = spec.end_date.replace("-", "")
+    set_run_dates(campaign, spec.start_date, spec.end_date)
     operations.append(op)
     changes.extend(
         [
