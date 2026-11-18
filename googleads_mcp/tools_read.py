@@ -240,12 +240,13 @@ def register(mcp, state) -> None:
         Call this before proposing a change, so you propose something that can
         actually be applied rather than something that will be refused.
         """
-        from googleads_mcp.guardrails import read_only_mode, writes_disabled
+        from googleads_mcp.guardrails import DailyUsage, read_only_mode, writes_disabled
 
         read_only = read_only_mode()
         return {
             "limits": state.limits.describe(),
             "session": state.counters.snapshot(),
+            "daily": DailyUsage(state.limits).snapshot(),
             "writes_disabled": writes_disabled(),
             "read_only_server": read_only,
             "pending_previews": state.previews.pending_count,
@@ -256,7 +257,13 @@ def register(mcp, state) -> None:
                 "what you would change, and let them make it from a writable "
                 "client or the Google Ads UI."
                 if read_only
-                else "Session counters reset only when the server restarts."
+                else "Two budgets apply to every apply_* and revert_change. "
+                "`session` is this server process and resets when it restarts. "
+                "`daily` is the local calendar day across EVERY process, counted "
+                "from the change ledger, and resets at local midnight -- it is "
+                "the one that bounds an agent in continuous use. A batch counts "
+                "as one apply; a creation counts as 3; a revert counts as 1 with "
+                "zero projected spend."
             ),
         }
 

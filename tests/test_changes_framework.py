@@ -220,3 +220,25 @@ def test_a_kind_cannot_be_registered_twice(rig):
     engine, kind, _ = rig
     with pytest.raises(ValueError, match="twice"):
         engine.add(kind)
+
+
+def test_a_second_process_on_the_same_ledger_is_held_to_the_same_day(rig):
+    """build_state() twice, one database: the daily cap is shared."""
+    engine, kind, account = rig
+    tight = limits(max_applies_per_day=1, max_applies_per_session=10)
+    engine.ctx.state.limits = tight
+    engine.ctx.state.counters = SessionCounters(tight)
+    engine.apply(kind, engine.preview(kind, {"words": ["a"]}).preview_token)
+
+    other_state = SimpleNamespace(
+        limits=tight, counters=SessionCounters(tight), previews=PreviewStore(),
+        read_client=None, default_customer_id="1112223333",
+    )
+    other = Engine(WriteContext(other_state, client=None, execute=engine.ctx._execute))
+    other_kind = other.add(AddWords(account))
+    preview = other.preview(other_kind, {"words": ["b"]})
+    assert any("daily apply limit" in w for w in preview.warnings)
+
+    with pytest.raises(PreviewExpired, match="daily apply limit"):
+        other.apply(other_kind, preview.preview_token)
+    assert account.keywords == {"a"}

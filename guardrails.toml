@@ -27,6 +27,14 @@ max_projected_delta_per_day = "50.00"   # upper bound on extra daily spend
 max_applies_per_session     = 20
 max_projected_session_delta = "150.00"
 
+# --- per-day bounds ----------------------------------------------------------
+# The session bounds above reset whenever the server restarts, which a client
+# does often. These count the LOCAL calendar day from the change ledger
+# (logs/google-ads.db), so they survive restarts and are shared by every
+# process. A batch counts as one apply, a creation as three, a revert as one.
+max_applies_per_day               = 40
+max_projected_delta_per_day_total = "200.00"
+
 [scope]
 # Customer ids the server may touch, as bare 10-digit strings. EMPTY means
 # "whatever GOOGLE_ADS_CUSTOMER_ID in .env points at, and nothing else" -- which

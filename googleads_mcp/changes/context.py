@@ -10,7 +10,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Callable
 
-from googleads_mcp.guardrails import Check
+from googleads_mcp.guardrails import Check, DailyUsage
 from googleads_reporting.query import Query, last_n_days
 
 
@@ -75,16 +75,36 @@ class WriteContext:
             return Check("google_validate_only", False, str(exc).strip())
         return Check("google_validate_only", True, "Google accepted the request (validate_only)")
 
-    # -- caps (the daily half arrives with the persistent cap) -------------
+    # -- caps ------------------------------------------------------------
+
+    @property
+    def daily(self) -> DailyUsage:
+        # Built per use, not cached: it holds no state, only the limits, and
+        # every answer comes from the ledger.
+        return DailyUsage(self.limits)
 
     def daily_would_exceed(self, projected: Decimal, *, weight: int = 1) -> str | None:
-        return None
+        return self.daily.would_exceed(projected, weight)
 
-    def cap_checks(self, projected: Decimal, weight: int) -> list[Check]:
-        return []
+    def cap_warnings(self, projected: Decimal, weight: int) -> list[str]:
+        """The session and daily caps, as warnings on the preview.
+
+        Warnings rather than FAIL checks on purpose: the caps are enforced at
+        APPLY time (another process may use up the day in between), and an
+        apply refused for the cap says which cap, where a blocked token could
+        only say "failed a guardrail".
+        """
+        warnings = []
+        for reason in (
+            self.counters.would_exceed(projected, weight=weight),
+            self.daily_would_exceed(projected, weight=weight),
+        ):
+            if reason:
+                warnings.append(f"the apply will be REFUSED: {reason}")
+        return warnings
 
     def daily_snapshot(self) -> dict[str, Any] | None:
-        return None
+        return self.daily.snapshot()
 
     # -- reads kinds share -------------------------------------------------
 

@@ -119,7 +119,6 @@ class Engine:
         checks.append(
             check_projected_delta(ctx.limits, max(proposal.projected, Decimal("0")))
         )
-        checks.extend(ctx.cap_checks(proposal.projected, kind.weight))
 
         payload = dict(proposal.payload)
         payload["before"] = proposal.before
@@ -162,7 +161,7 @@ class Engine:
             projected_daily_spend_delta=f"{proposal.projected:.2f}",
             checks=render_checks(checks),
             blocked=blocked,
-            warnings=proposal.warnings,
+            warnings=[*proposal.warnings, *ctx.cap_warnings(proposal.projected, kind.weight)],
             note=proposal.note,
             items=(
                 [{k: v for k, v in asdict(i).items() if k != "detail"} for i in items]
