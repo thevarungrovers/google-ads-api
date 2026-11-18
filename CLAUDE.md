@@ -56,8 +56,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 - **Every created name goes through `googleads_reporting/naming.py`.** A kind
   that creates a named entity stamps it with `ctx.name_for_create`, lists what
   it sends in `Proposal.created_names` and declares `creates_named`
-  (`tests/test_mcp_surface.py` fails one that does not). Renames go through
-  `ctx.name_for_rename`: the agent renames only its own entities.
+  (`tests/test_mcp_surface.py` fails one that does not). The engine builds the
+  request at preview and FAILs any `create.name` in it that breaks the rules or
+  differs from `created_names`. Renames go through `ctx.name_for_rename`: the
+  agent renames only its own entities (proved by prefix, or by id in the ledger).
 - **The naming identity comes only from `.env`** (`GOOGLE_ADS_MCP_OWNER_INITIALS`,
   `GOOGLE_ADS_MCP_AGENT_NAME`; `config.env` too, `.env` winning) -- never a tool
   argument or the process env -- so there is one identity per checkout. Empty

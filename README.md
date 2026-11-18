@@ -325,13 +325,30 @@ checkout** -- a second agent needs its own checkout with its own `.env`.
 | Campaign | yes; its budget is named `<campaign name> budget` | 248 UTF-8 bytes |
 | Ad group (alone, or inside a new campaign) | yes | 254 characters |
 | Label | yes | 80 characters |
+| Shared budget (CLI `budget create` only) | yes, `<OWNER>-cli-` | 255 UTF-8 bytes |
 | Responsive search ad | no -- RSAs have no name in the API | -- |
 | Keywords, negatives, sitelinks, callouts, snippets, targeting | no -- no name field | -- |
 
 A name over the limit is **refused, never truncated** -- the preview says how
-long the base may be. Passing a name that already carries your prefix does not
-double it; passing one with **another** identity's prefix (`CD-bot-...`) is
-refused.
+long the base may be, in the limit's own unit (bytes for a campaign, characters
+for an ad group). Passing a name that already carries your prefix does not
+double it. Also refused, at preview:
+
+- **another identity's prefix** (`CD-bot-...`, `AB-cli-...`) -- **even when no
+  identity is configured**: with neither key set the name is used as given,
+  but never one that would attribute it to somebody else;
+- **a prefix twice** -- `AB-max-AB-max-x`, or `AB-max-CD-bot-x`: after your
+  prefix is taken off once, what is left must be a plain base;
+- with **initials only**, a base that starts with a lowercase word and a `-`
+  (`bot-x` would make `AB-bot-x`, which reads as agent `bot`'s) -- use `_` or
+  reorder it;
+- control and invisible characters (a zero-width space, a line separator),
+  which would make two names that look the same differ.
+
+As a last check, every preview that creates something reads the names off the
+**request it would send** -- the campaign, its budget, every nested ad group --
+and fails (`name_prefix`, `names_sent`) if one lacks the prefix, breaks a rule
+above, or differs from the names the preview shows.
 
 **The CLI** (`scripts/manage.py`) stamps what a person creates
 `<OWNER>-cli-<base>` when the initials are set, and leaves the name plain when
@@ -341,9 +358,12 @@ It prints the identity it will use before you confirm.
 ### Renames
 
 The agent may rename **only its own** campaigns and ad groups: ones whose name
-carries its prefix, or that its ledger shows it created. A campaign made by hand,
-or by another agent, is refused in the preview -- rename those in the Google Ads
-UI. The prefix is kept on a rename (only the base changes), and one that a person
+carries its prefix, or that its ledger shows -- **by id** -- it created. A name
+that reads as another identity's full `OWNER-agent-` prefix is never its own,
+even when it starts with its prefix (with initials `AB` only, `AB-bot-x` and
+`AB-cli-x` are not yours) and even when the ledger shows it created it. A
+campaign made by hand, or by another agent, is refused in the preview -- rename
+those in the Google Ads UI. The prefix is kept on a rename (only the base changes), and one that a person
 removed in the UI is put back. Undoing a rename restores the exact old name.
 
 ### Finding things by who made them
@@ -355,7 +375,7 @@ removed in the UI is put back. Undoing a rename restores the exact old name.
 | `origin="agent"` / `"cli"` / `"manual"` | names with an agent prefix / a `-cli-` prefix / no prefix |
 | `agent_name="max"` | names with that agent part |
 | `owner="AB"` | names starting `AB-` |
-| `mine=True` | names with **this** server's prefix |
+| `mine=True` | names with **this** server's prefix -- and not another identity's full form, so initials-only `AB` does not match `AB-bot-x` |
 
 Every row also carries `origin`, `owner`, `agent` and `base` parsed from the
 name, and `ledger_created`. The name is a convention anyone can type; the
@@ -497,6 +517,14 @@ revert_change(entry_id="...")
 Refuses if the change never applied, if it has already been undone, or if
 **somebody else moved the value since** — in that last case undoing yours would
 throw away theirs.
+
+A revert is not free. Undoing a cut, a pause or anything that narrowed delivery
+projects the spend it puts back. Reverting a **revert** re-applies the original
+change, so it costs what that change cost -- a change that both narrowed and
+widened (Search Partners off and Display on) is not free to re-apply -- and it
+is held to the per-change limit and the kind's own checks again. A negative
+recorded before the ledger kept the campaigns it narrowed is reverted only when
+its campaign can be read off the row; otherwise the revert is refused.
 
 ---
 

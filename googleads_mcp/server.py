@@ -85,7 +85,9 @@ THE CAPS. Every apply_* and revert_change counts against two budgets:
   daily    the LOCAL calendar day across every process, counted from the
            change ledger; resets at local midnight
 A batch counts once; a creation counts 3; a revert counts 1 and projects the
-spend it restores. Re-ENABLING (campaign, ad group, keyword, ad) is exempt from
+spend it restores. Reverting a REVERT re-applies the original change: it costs
+what that change cost (a change that narrowed AND widened is not free) and must
+pass the per-change limit again. Re-ENABLING (campaign, ad group, keyword, ad) is exempt from
 the per-change max_projected_delta_per_day (shown as SKIP) and counted in full
 against the daily total instead. Bid and budget increases need both. When a
 cap refuses, stop and tell the human; do not work around it.
@@ -116,11 +118,15 @@ the preview's `naming` block shows the exact final name. The parts come from
 the repo's .env only; get_guardrails.identity shows which are set, and an unset
 part is simply left out (none set: the name is used as given). A malformed .env
 value fails agent_identity on every create and rename -- tell the human the key
-to fix. A name with ANOTHER agent's prefix is refused; over-long names are
-refused (name_length says how long the base may be), never truncated. RSAs,
-keywords and assets have no name. Renames: only your OWN entities (your prefix,
-or the ledger shows you created them); the prefix is kept. find_campaigns,
-find_ad_groups and list_labels filter with origin / agent_name / owner / mine.
+to fix. A name with ANOTHER identity's OWNER-agent- prefix is refused even when
+no identity is configured, as is a prefix twice, an invisible or control
+character, and (initials only) a base starting "<lowercase word>-"; over-long
+names are refused (name_length says how long the base may be), never truncated.
+The preview checks the names in the request itself (name_prefix, names_sent).
+RSAs, keywords and assets have no name. Renames: only your OWN entities (your
+prefix and no other identity's full form, or the ledger shows by id that you
+created them); the prefix is kept. find_campaigns, find_ad_groups and
+list_labels filter with origin / agent_name / owner / mine.
 
 NOTHING IS EVER REMOVED. No status is ever set to REMOVED; pausing is the undo.
 Created campaigns, ad groups and ads start PAUSED and are never removed here

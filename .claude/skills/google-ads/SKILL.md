@@ -55,8 +55,9 @@ it does.
 - **DON'T apply a recommendation without reading it** against `run_report`.
   Google is paid by the click.
 - **DON'T put a prefix on a name yourself**, and never another agent's
-  (`CD-bot-...`): it is refused. Don't try to rename an entity you did not
-  create -- that is refused too.
+  (`CD-bot-...`): it is refused, even when no identity is configured, and so is
+  a doubled prefix (`AB-max-AB-max-x`). Don't try to rename an entity you did
+  not create -- that is refused too.
 
 ## Naming
 
@@ -72,9 +73,16 @@ optional: with only initials the name is `AB-<base>`, with only an agent name
 - **Limits, prefix included:** campaign 248 bytes, ad group 254 characters,
   label 80. Too long is a `name_length` FAIL that says how long the base may
   be -- never truncated; shorten the base and preview again.
+- **Refused:** another identity's prefix (whatever is configured), a prefix
+  twice, control or invisible characters, and -- with initials only -- a base
+  starting `<lowercase word>-` (it would read as that agent's name; use `_`).
+- **Backstop:** the preview reads the names off the request it would send;
+  `name_prefix` / `names_sent` FAIL if one lacks the prefix, breaks a rule or
+  differs from the `naming` block.
 - **Renames:** only your own campaigns and ad groups (your prefix, or the
-  ledger shows you created them). The prefix stays; a manual or other agent's
-  entity fails `own_entity`.
+  ledger shows by id that you created them). A name in another identity's
+  full form is never yours -- with initials `AB` only, `AB-bot-x` is not. The
+  prefix stays; a manual or other agent's entity fails `own_entity`.
 - **Finding yours:** `find_campaigns(mine=True)`; also `origin`
   (`agent` / `cli` / `manual`), `agent_name`, `owner` on `find_campaigns`,
   `find_ad_groups` and `list_labels`. Rows carry `origin`, `owner`, `agent`,
@@ -91,7 +99,9 @@ optional: with only initials the name is `AB-<base>`, with only an agent name
 | `max_projected_delta_per_day` | one change | — |
 
 - A **batch** (20 keywords) counts as one apply. A **creation** counts as 3.
-  A **revert** counts as 1 and projects the spend it restores.
+  A **revert** counts as 1 and projects the spend it restores. Reverting a
+  revert re-applies the original change: it costs what that cost (even when it
+  also narrowed) and must pass the per-change limit again.
 - **Re-enabling** (campaign, ad group, keyword, ad) is exempt from the
   per-change limit — the check reads `SKIP` — and is counted in full against the
   daily total. The preview says "uses X of today's remaining Y".
