@@ -143,6 +143,17 @@ class Engine:
             for item in items:
                 item.detail = {**(item.detail or {}), **record}
 
+        payload = dict(proposal.payload)
+        payload["before"] = proposal.before
+        payload["after"] = proposal.after
+        payload["_items"] = [asdict(item) for item in items]
+        payload["_entity"] = {
+            "entity_type": proposal.entity_type,
+            "entity_id": str(proposal.entity_id),
+            "entity_name": proposal.entity_name,
+            "field_name": proposal.field_name,
+        }
+
         checks: list[Check] = [
             check_writes_enabled(),
             check_customer_in_scope(
@@ -152,7 +163,7 @@ class Engine:
         if proposal.campaign_id is not None:
             checks.append(check_campaign_in_scope(ctx.limits, str(proposal.campaign_id)))
         checks.extend(proposal.checks)
-        checks.extend(self._naming_checks(kind, proposal))
+        checks.extend(self._naming_checks(kind, proposal, payload))
         if proposal.batch:
             checks.append(check_count(ctx.limits, len(items)))
         if proposal.is_enable:
@@ -172,17 +183,6 @@ class Engine:
             enable_warnings.append(
                 f"re-enabling resumes spend up to the daily budget; it {daily_total.detail}"
             )
-
-        payload = dict(proposal.payload)
-        payload["before"] = proposal.before
-        payload["after"] = proposal.after
-        payload["_items"] = [asdict(item) for item in items]
-        payload["_entity"] = {
-            "entity_type": proposal.entity_type,
-            "entity_id": str(proposal.entity_id),
-            "entity_name": proposal.entity_name,
-            "field_name": proposal.field_name,
-        }
 
         # Google's own verdict, without changing anything. Only once our own
         # checks pass: a blocked preview will never be applied, so asking
@@ -228,27 +228,59 @@ class Engine:
 
     # -- naming ------------------------------------------------------------
 
-    def _naming_checks(self, kind: ChangeKind, proposal: Proposal) -> list[Check]:
+    def _naming_checks(self, kind: ChangeKind, proposal: Proposal,
+                       payload: dict[str, Any]) -> list[Check]:
         """FAIL lines for every naming problem, plus the backstop.
 
-        The backstop: when a prefix is configured, every name a creating kind
-        SENDS must carry it. A kind that forgot to stamp a name is caught here,
-        in the preview the human reads, rather than by a reader of the account
-        a month later. With no prefix configured, names are used as given.
+        The backstop reads the names off the REQUEST a creating kind builds --
+        every ``create.name``, nested ad groups and the budget included -- not
+        off what the kind declared in ``created_names``. When a prefix is
+        configured each must carry it (``name_prefix``); whatever is
+        configured, none may carry another identity's full prefix, break its
+        length or character rules, or differ from the names the preview
+        declared (``names_sent``). A kind that forgot to stamp, or stamped one
+        name and sent another, is caught here, in the preview the human
+        reads, rather than by a reader of the account a month later.
         """
-        from googleads_reporting.naming import owns
+        from googleads_reporting import naming
 
         checks = [Check(name, False, detail)
                   for stamped in proposal.names for name, detail in stamped.problems]
+        if not kind.creates_named:
+            return checks
         identity = self.ctx.identity
-        if kind.creates_named and identity.prefix and identity.valid:
-            unstamped = [f"{etype} {name!r}" for etype, name in proposal.created_names
-                         if not owns(identity, name)]
+        try:
+            built = built_names(kind.build(self.ctx, payload))
+        except Exception as exc:  # noqa: BLE001 - reported as a FAIL, never sent
+            return [*checks, Check("names_sent", False,
+                                   f"could not build the request to read its names: {exc}")]
+        if identity.prefix and identity.valid:
+            unstamped = [f"{etype} {name!r}" for etype, name in built
+                         if not naming.owns(identity, name)]
             checks.append(Check(
                 "name_prefix", not unstamped,
                 f"every created name starts with {identity.prefix}" if not unstamped
                 else f"missing the {identity.prefix} prefix: {', '.join(unstamped)}",
             ))
+        problems = []
+        for etype, name in built:
+            if (forged := naming.foreign(identity, name)) is not None:
+                problems.append(f"{etype} {name!r} carries {forged.owner}-{forged.agent}-, "
+                                "another identity's prefix")
+            problems.extend(f"{etype} {name!r}: {why}"
+                            for why in naming.final_name_problems(name, etype))
+        declared = sorted(tuple(pair) for pair in proposal.created_names)
+        sent = sorted(pair for pair in built if pair[0] in kind.creates_named)
+        if sent != declared:
+            problems.append(
+                "the request does not create the names this preview shows: it sends "
+                f"{[n for _, n in sent]}, the preview shows {[n for _, n in declared]}"
+            )
+        checks.append(Check(
+            "names_sent", not problems,
+            "the request creates exactly the names shown" if not problems
+            else "; ".join(problems),
+        ))
         return checks
 
     @staticmethod
@@ -617,6 +649,35 @@ class Engine:
             session=self.ctx.counters.snapshot(),
             daily=self.ctx.daily_snapshot(),
         )
+
+
+#: Created message type -> naming entity type (NAME_LIMITS' keys).
+_NAMED_TYPES = {"Campaign": "campaign", "AdGroup": "ad_group",
+                "CampaignBudget": "budget", "Label": "label"}
+
+
+def built_names(plan) -> list[tuple[str, str]]:
+    """(entity type, name) for every entity a plan's operations CREATE with a
+    name: ``XOperation.create.name``, inside a ``MutateOperation`` or not."""
+    out: list[tuple[str, str]] = []
+
+    def walk(message) -> None:
+        pb_of = getattr(type(message), "pb", None)
+        pb = pb_of(message) if callable(pb_of) else message
+        if not hasattr(pb, "DESCRIPTOR") or "operation" not in pb.DESCRIPTOR.oneofs_by_name:
+            return
+        which = pb.WhichOneof("operation")
+        if which == "create":
+            created = pb.create
+            if "name" in created.DESCRIPTOR.fields_by_name and created.name:
+                kind = created.DESCRIPTOR.name
+                out.append((_NAMED_TYPES.get(kind, kind), created.name))
+        elif which:
+            walk(getattr(pb, which))
+
+    for operation in getattr(plan, "operations", None) or []:
+        walk(operation)
+    return out
 
 
 def merge_plans(plans: list[Any]):

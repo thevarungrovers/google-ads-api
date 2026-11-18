@@ -256,23 +256,31 @@ class NameThing(ChangeKind):
     ledger_keys = (("label", "created"),)
     creates_named = ("label",)
 
-    def propose(self, ctx, name: str, stamped: bool = True) -> Proposal:
-        """Create a named thing. Writes nothing."""
+    def propose(self, ctx, name: str, stamped: bool = True, sent: str | None = None,
+                declared: str | None = None) -> Proposal:
+        """Create a named thing. Writes nothing.
+
+        ``sent`` plays a kind whose request carries a name other than the
+        one it stamped; ``declared`` one whose created_names lie."""
         names = [ctx.name_for_create("label", name)] if stamped else []
         final = names[0].final if names else name
         return Proposal(
             entity_type="label", entity_id=f"new:{final}", entity_name=final, path=final,
             field_name="created", before="(none)", after=final, checks=[],
-            projected=Decimal("0"), payload={"name": final}, names=names,
-            created_names=[("label", final)],
+            projected=Decimal("0"), payload={"name": sent if sent is not None else final},
+            names=names, created_names=[("label", declared if declared is not None else final)],
         )
 
     def current(self, ctx, payload):
         return "(none)"
 
     def build(self, ctx, payload):
+        from kindkit import RAW
+
+        operation = RAW.get_type("LabelOperation")
+        operation.create.name = payload["name"]
         return PlannedChange(action="create", entity="label", label=payload["name"],
-                             service="S", method="m", operations=[("add", payload["name"])])
+                             service="S", method="m", operations=[operation])
 
 
 def naming_rig(owner="", agent=""):
@@ -335,3 +343,47 @@ def test_an_over_length_name_is_refused_not_truncated():
     preview = engine.preview(kind, {"name": "y" * 80})
     assert preview.blocked and fails(preview, "name_length")
     assert preview.after == "AB-max-" + "y" * 80
+
+
+# -- the backstop reads what is BUILT, not what the kind declared ------------
+
+
+def test_the_backstop_fails_a_request_that_sends_an_unstamped_name():
+    """The kind stamped and declared AB-max-x, but its request carries "x"."""
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "x", "sent": "x"})
+    assert preview.blocked and fails(preview, "name_prefix")
+
+
+def test_the_backstop_fails_a_request_that_differs_from_the_preview():
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "x", "sent": "AB-max-y"})
+    assert preview.blocked and fails(preview, "names_sent")
+    assert any("AB-max-y" in line for line in preview.checks)
+
+
+def test_the_backstop_fails_a_declaration_that_hides_the_real_name():
+    """created_names is a declaration; the request is the truth."""
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "x", "stamped": False, "declared": "AB-max-x"})
+    assert preview.blocked and fails(preview, "name_prefix")
+
+
+def test_the_backstop_fails_a_sent_name_over_the_limit():
+    engine, kind = naming_rig("AB", "max")
+    long = "AB-max-" + "y" * 80
+    preview = engine.preview(kind, {"name": "x", "sent": long, "declared": long})
+    assert preview.blocked and fails(preview, "names_sent")
+
+
+def test_the_backstop_fails_a_sent_name_forging_another_identity_with_no_prefix():
+    engine, kind = naming_rig()
+    preview = engine.preview(kind, {"name": "x", "sent": "CD-bot-x", "declared": "CD-bot-x"})
+    assert preview.blocked and fails(preview, "names_sent")
+
+
+def test_the_backstop_passes_a_faithful_request():
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "x"})
+    assert not preview.blocked, preview.checks
+    assert any(line.startswith("OK") and " names_sent:" in line for line in preview.checks)

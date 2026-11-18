@@ -315,6 +315,18 @@ def check_filter(owner: str | None, agent_name: str | None) -> None:
         )
 
 
+def final_name_problems(name: str, entity_type: str) -> list[str]:
+    """Why a FINAL name, as it will be sent, breaks Google's rules: control
+    characters, or over the entity type's length limit. Empty when it is fine."""
+    out = []
+    if _CONTROL.search(name):
+        out.append("contains a control character (NUL, TAB, CR or LF)")
+    limit = NAME_LIMITS.get(entity_type)
+    if limit is not None and length_of(name, entity_type) > limit[0]:
+        out.append(f"{length_of(name, entity_type)} {limit[1]} against {limit[0]}")
+    return out
+
+
 def length_of(name: str, entity_type: str) -> int:
     unit = NAME_LIMITS.get(entity_type, (0, "characters"))[1]
     return len(name.encode("utf-8")) if unit == "bytes" else len(name)
