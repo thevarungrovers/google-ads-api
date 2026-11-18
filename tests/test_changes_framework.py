@@ -242,3 +242,96 @@ def test_a_second_process_on_the_same_ledger_is_held_to_the_same_day(rig):
     with pytest.raises(PreviewExpired, match="daily apply limit"):
         other.apply(other_kind, preview.preview_token)
     assert account.keywords == {"a"}
+
+
+# -- naming: the engine's half -------------------------------------------
+
+
+class NameThing(ChangeKind):
+    """Creates one named thing; ``stamped=False`` plays a kind that forgot."""
+
+    name = "name_thing"
+    preview_title = "Preview naming a thing"
+    apply_title = "Apply naming a thing"
+    ledger_keys = (("label", "created"),)
+    creates_named = ("label",)
+
+    def propose(self, ctx, name: str, stamped: bool = True) -> Proposal:
+        """Create a named thing. Writes nothing."""
+        names = [ctx.name_for_create("label", name)] if stamped else []
+        final = names[0].final if names else name
+        return Proposal(
+            entity_type="label", entity_id=f"new:{final}", entity_name=final, path=final,
+            field_name="created", before="(none)", after=final, checks=[],
+            projected=Decimal("0"), payload={"name": final}, names=names,
+            created_names=[("label", final)],
+        )
+
+    def current(self, ctx, payload):
+        return "(none)"
+
+    def build(self, ctx, payload):
+        return PlannedChange(action="create", entity="label", label=payload["name"],
+                             service="S", method="m", operations=[("add", payload["name"])])
+
+
+def naming_rig(owner="", agent=""):
+    from googleads_reporting.naming import Identity
+
+    def execute(_client, plan, apply=False):
+        return SimpleNamespace(resource_names=["labels/1"] if apply else [])
+
+    state = SimpleNamespace(
+        limits=limits(), counters=SessionCounters(limits()), previews=PreviewStore(),
+        read_client=None, default_customer_id="1112223333",
+        identity=Identity.from_values(owner, agent, source=".env"),
+    )
+    engine = Engine(WriteContext(state, client=None, execute=execute))
+    return engine, engine.add(NameThing())
+
+
+def fails(preview, name):
+    return any(line.startswith("FAIL") and f" {name}:" in line for line in preview.checks)
+
+
+@pytest.mark.parametrize("owner, agent, final", [
+    ("AB", "max", "AB-max-x"), ("AB", "", "AB-x"), ("", "max", "max-x"), ("", "", "x"),
+])
+def test_a_stamped_create_shows_the_final_name_and_records_the_identity(owner, agent, final):
+    engine, kind = naming_rig(owner, agent)
+    preview = engine.preview(kind, {"name": "x"})
+    assert not preview.blocked, preview.checks
+    assert preview.after == final and preview.naming["final"] == final
+    assert preview.naming["prefix"] == final[:-1]
+    result = engine.apply(kind, preview.preview_token)
+    detail = ledger.find_entry(result.entry_id)["detail"]
+    assert detail["identity"] == {"owner": owner, "agent": agent, "source": ".env"}
+    assert detail["requested_name"] == "x"
+    assert detail["created_names"] == [["label", final]]
+
+
+def test_the_backstop_fails_a_create_that_skipped_the_prefix():
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "x", "stamped": False})
+    assert preview.blocked and fails(preview, "name_prefix")
+
+
+def test_with_no_prefix_configured_the_backstop_does_not_apply():
+    engine, kind = naming_rig()
+    preview = engine.preview(kind, {"name": "x", "stamped": False})
+    assert not preview.blocked
+    assert not any(" name_prefix:" in line for line in preview.checks)
+
+
+def test_a_malformed_identity_blocks_the_create_naming_the_env_key():
+    engine, kind = naming_rig("a1", "max")
+    preview = engine.preview(kind, {"name": "x"})
+    assert preview.blocked and fails(preview, "agent_identity")
+    assert any("GOOGLE_ADS_MCP_OWNER_INITIALS" in line for line in preview.checks)
+
+
+def test_an_over_length_name_is_refused_not_truncated():
+    engine, kind = naming_rig("AB", "max")
+    preview = engine.preview(kind, {"name": "y" * 80})
+    assert preview.blocked and fails(preview, "name_length")
+    assert preview.after == "AB-max-" + "y" * 80

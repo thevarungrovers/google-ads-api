@@ -132,6 +132,16 @@ class Engine:
                 narrowed = [] if proposal.campaign_id is None else [str(proposal.campaign_id)]
             for item in items:
                 item.detail = {**(item.detail or {}), "narrowing": list(narrowed)}
+        if proposal.names:
+            # Who named it, on every row: reconcile_ledger tells two agents in
+            # one checkout apart by this, and a rename's "ours" test reads it.
+            record = {
+                "identity": ctx.identity.ledger(),
+                "requested_name": proposal.names[0].requested,
+                "created_names": [list(pair) for pair in proposal.created_names],
+            }
+            for item in items:
+                item.detail = {**(item.detail or {}), **record}
 
         checks: list[Check] = [
             check_writes_enabled(),
@@ -142,6 +152,7 @@ class Engine:
         if proposal.campaign_id is not None:
             checks.append(check_campaign_in_scope(ctx.limits, str(proposal.campaign_id)))
         checks.extend(proposal.checks)
+        checks.extend(self._naming_checks(kind, proposal))
         if proposal.batch:
             checks.append(check_count(ctx.limits, len(items)))
         if proposal.is_enable:
@@ -155,6 +166,7 @@ class Engine:
             )
         daily_total = ctx.daily.check(proposal.projected)
         checks.append(daily_total)
+        naming_warnings = [w for w in (s.warning() for s in proposal.names) if w]
         enable_warnings = []
         if proposal.is_enable and proposal.projected > 0:
             enable_warnings.append(
@@ -202,7 +214,7 @@ class Engine:
             projected_daily_spend_delta=f"{proposal.projected:.2f}",
             checks=render_checks(checks),
             blocked=blocked,
-            warnings=[*proposal.warnings, *enable_warnings,
+            warnings=[*proposal.warnings, *naming_warnings, *enable_warnings,
                       *ctx.cap_warnings(proposal.projected, kind.weight)],
             note=proposal.note,
             items=(
@@ -211,7 +223,42 @@ class Engine:
                 else None
             ),
             apply_weight=kind.weight,
+            naming=self._naming_block(proposal),
         )
+
+    # -- naming ------------------------------------------------------------
+
+    def _naming_checks(self, kind: ChangeKind, proposal: Proposal) -> list[Check]:
+        """FAIL lines for every naming problem, plus the backstop.
+
+        The backstop: when a prefix is configured, every name a creating kind
+        SENDS must carry it. A kind that forgot to stamp a name is caught here,
+        in the preview the human reads, rather than by a reader of the account
+        a month later. With no prefix configured, names are used as given.
+        """
+        from googleads_reporting.naming import owns
+
+        checks = [Check(name, False, detail)
+                  for stamped in proposal.names for name, detail in stamped.problems]
+        identity = self.ctx.identity
+        if kind.creates_named and identity.prefix and identity.valid:
+            unstamped = [f"{etype} {name!r}" for etype, name in proposal.created_names
+                         if not owns(identity, name)]
+            checks.append(Check(
+                "name_prefix", not unstamped,
+                f"every created name starts with {identity.prefix}" if not unstamped
+                else f"missing the {identity.prefix} prefix: {', '.join(unstamped)}",
+            ))
+        return checks
+
+    @staticmethod
+    def _naming_block(proposal: Proposal) -> dict[str, Any] | None:
+        if not proposal.names:
+            return None
+        block = proposal.names[0].block()
+        if len(proposal.names) > 1:
+            block["also"] = [s.block() for s in proposal.names[1:]]
+        return block
 
     # -- apply -----------------------------------------------------------
 

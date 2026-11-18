@@ -46,6 +46,26 @@ class WriteContext:
     def default_customer(self) -> str:
         return self.state.default_customer_id
 
+    # -- naming ------------------------------------------------------------
+
+    @property
+    def identity(self):
+        """Whose prefix goes on created names (from .env; see naming.py)."""
+        from googleads_reporting.naming import Identity
+
+        return getattr(self.state, "identity", None) or Identity()
+
+    def name_for_create(self, entity_type: str, requested: str):
+        """The final name for a new ``entity_type``: a naming.Stamped.
+
+        Refuses (NameRefused, a ValueError) a name that cannot be used at all;
+        a name that is only too long, or an identity that is malformed, comes
+        back with problems the engine turns into FAIL lines.
+        """
+        from googleads_reporting import naming
+
+        return naming.stamp(self.identity, requested, entity_type=entity_type)
+
     def target_customer(self) -> str:
         """The customer a write will actually be sent to.
 

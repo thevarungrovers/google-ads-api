@@ -59,6 +59,10 @@ class ChangePreview(BaseModel):
     items: list[dict[str, Any]] | None = Field(
         default=None, description="For a batch: one entry per entity it touches"
     )
+    naming: dict[str, Any] | None = Field(
+        default=None,
+        description="For a create or rename: the exact name that will be sent, and why",
+    )
     apply_weight: int = Field(
         default=1, description="Applies this costs against the session and daily caps"
     )

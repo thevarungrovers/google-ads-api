@@ -206,6 +206,16 @@ class Proposal:
     #: The campaigns a narrowing change narrows. None means [campaign_id];
     #: a shared negative list sets every campaign attached to it.
     narrowed_campaigns: list[str] | None = None
+    #: Every name this change creates or sets, as ``ctx.name_for_create`` /
+    #: ``ctx.name_for_rename`` decided it (googleads_reporting.naming). The
+    #: engine turns their problems into FAIL lines, their prefixes into
+    #: warnings and the first one into the preview's ``naming`` block, and
+    #: records the identity on every ledger row.
+    names: list[Any] = field(default_factory=list)
+    #: (entity type, name) for every named entity the REQUEST creates, read
+    #: off what will be sent -- the engine's backstop checks each carries
+    #: our prefix when one is configured.
+    created_names: list[tuple[str, str]] = field(default_factory=list)
 
     def ledger_items(self) -> list[LedgerItem]:
         if self.items:
@@ -309,6 +319,11 @@ class ChangeKind:
     #: Every change of this kind narrows delivery (negatives). For a kind that
     #: narrows only sometimes, set Proposal.narrows instead.
     narrows: bool = False
+    #: The entity types this kind creates WITH A NAME. Such a kind must stamp
+    #: every name through ctx.name_for_create and list them in
+    #: Proposal.created_names; tests/test_mcp_surface.py runs every creating
+    #: tool and fails one that does not, so a new one cannot ship unprefixed.
+    creates_named: tuple[str, ...] = ()
 
     def validates(self, payload: dict[str, Any]) -> bool:
         """Whether THIS change can be checked with validate_only.
