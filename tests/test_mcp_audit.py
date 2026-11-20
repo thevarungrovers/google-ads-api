@@ -76,6 +76,20 @@ def test_recommendations_carry_their_id_and_budget_numbers(monkeypatch):
     assert "recommendation.type IN ('CAMPAIGN_BUDGET')" in account.queries[-1]
 
 
+def test_recommendations_select_whole_messages_only():
+    """Live, v25: selecting recommendation.impact.base_metrics.clicks (or any
+    field inside impact, keyword_recommendation or campaign_budget_recommendation)
+    is refused as "Unrecognized fields"; only the message itself is selectable."""
+    messages = ("recommendation.impact", "recommendation.keyword_recommendation",
+                "recommendation.campaign_budget_recommendation")
+    assert set(messages) <= set(tools_audit.RECOMMENDATION_SELECT)
+    assert not [f for f in tools_audit.RECOMMENDATION_SELECT
+                if any(f.startswith(m + ".") for m in messages)]
+    # Everything read is inside something selected.
+    assert all(any(f == s or f.startswith(s + ".") for s in tools_audit.RECOMMENDATION_SELECT)
+               for f in tools_audit.RECOMMENDATION_FIELDS)
+
+
 def test_recent_changes_stay_inside_googles_30_day_window(monkeypatch):
     import datetime as dt
 

@@ -48,6 +48,17 @@ RECOMMENDATION_FIELDS = (
     "recommendation.keyword_recommendation.keyword.match_type",
 )
 
+#: What the recommendation query SELECTs. GAQL lets only these whole messages
+#: be selected -- not their fields (checked live against v25's field catalogue:
+#: ``recommendation.impact.base_metrics.clicks`` is "Unrecognized") -- so the
+#: query selects the message and RECOMMENDATION_FIELDS reads inside it.
+RECOMMENDATION_SELECT = (
+    "recommendation.resource_name", "recommendation.type", "recommendation.campaign",
+    "recommendation.ad_group", "recommendation.campaign_budget",
+    "recommendation.dismissed", "recommendation.impact",
+    "recommendation.campaign_budget_recommendation", "recommendation.keyword_recommendation",
+)
+
 CHANGE_EVENT_FIELDS = (
     "change_event.change_date_time", "change_event.user_email",
     "change_event.client_type", "change_event.change_resource_type",
@@ -100,9 +111,9 @@ def register(mcp, state) -> None:
         if campaign_id:
             where.append(f"campaign.id = {int(campaign_id)}")
         found = client.rows(Query(
-            select=RECOMMENDATION_FIELDS, from_resource="recommendation",
+            select=RECOMMENDATION_SELECT, from_resource="recommendation",
             where=tuple(where), limit=limit,
-        ))
+        ), read=RECOMMENDATION_FIELDS)
         out = []
         for r in found:
             base_cost = r["recommendation.impact.base_metrics.cost_micros"]
