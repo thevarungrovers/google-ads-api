@@ -31,6 +31,27 @@ ALLOWED_MUTATE_SERVICES = frozenset(
         "AdGroupAdService",
         "AdGroupCriterionService",
         "AssetService",
+        # Keywords and negatives (agent-parity, subgroup A). Campaign-level
+        # negatives and targeting criteria, shared negative keyword lists and
+        # attaching one to a campaign. SharedSetService itself is NOT here:
+        # nothing creates or edits a list's own settings.
+        "CampaignCriterionService",
+        "SharedCriterionService",
+        "CampaignSharedSetService",
+        # Ads and assets (subgroup D): linking a sitelink / callout /
+        # structured snippet asset to a campaign or ad group.
+        "CampaignAssetService",
+        "AdGroupAssetService",
+        # The low-risk edits (Phase 4): labels and label attachments, and
+        # dismissing a recommendation. RecommendationService is here for
+        # dismiss_recommendation ONLY -- its apply_recommendation would skip
+        # every bound, and _REQUEST_TYPES does not map it.
+        "LabelService",
+        "CampaignLabelService",
+        "AdGroupLabelService",
+        "AdGroupAdLabelService",
+        "AdGroupCriterionLabelService",
+        "RecommendationService",
         # Reads are allowed here too: a mutation needs to fetch current state to
         # show a before/after diff. GoogleAdsService also carries the ATOMIC
         # multi-entity mutate used to build a whole campaign in one request --
@@ -143,18 +164,36 @@ class MutatingGoogleAdsClient:
         """Run a GAQL read, used to capture state before a mutation."""
         from ..query import assert_select_only
 
+        from ..retry import retry_read
+
         service = self.service("GoogleAdsService")
         target = self.resolve_customer_id(customer_id)
-        rows = []
-        with logdb.record_api_call(
-            "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
-        ) as slot:
-            for batch in service.search_stream(
-                customer_id=target, query=assert_select_only(gaql)
-            ):
-                rows.extend(batch.results)
-            slot["row_count"] = len(rows)
-        return rows
+
+        # Retried: this is a read, even though it lives on the writing client.
+        # mutate() below never is -- see retry.py for why.
+        def run() -> list[Any]:
+            rows: list[Any] = []
+            with logdb.record_api_call(
+                "search_stream", service="GoogleAdsService", customer_id=target, request=gaql
+            ) as slot:
+                for batch in service.search_stream(
+                    customer_id=target, query=assert_select_only(gaql)
+                ):
+                    rows.extend(batch.results)
+                slot["row_count"] = len(rows)
+            return rows
+
+        from google.ads.googleads.errors import GoogleAdsException
+
+        from ..client import ReadOnlyGoogleAdsClient
+
+        try:
+            return retry_read(run)
+        except GoogleAdsException as exc:
+            # Formatted after the retries (they classify the original): the
+            # library's repr buries Google's error code and message under a
+            # gRPC dump, which reached the agent verbatim from a preview.
+            raise ReadOnlyGoogleAdsClient._describe_failure(exc, target, gaql) from exc
 
     # -- the one write path ------------------------------------------------
 
@@ -195,10 +234,15 @@ class MutatingGoogleAdsClient:
         )
 
         request = self._raw.get_type(_request_type_for(method))
+        if method in NO_VALIDATE_ONLY and validate_only:
+            self._audit.outcome(correlation_id, ok=True, resource_names=[],
+                                error="not sent: this method has no validate_only")
+            return MutationResult(validated_only=True, resource_names=[])
         request.customer_id = target
         request.operations.extend(operations)
         request.partial_failure = partial_failure
-        request.validate_only = validate_only
+        if method not in NO_VALIDATE_ONLY:
+            request.validate_only = validate_only
 
         try:
             with logdb.record_api_call(
@@ -268,6 +312,11 @@ class MutatingGoogleAdsClient:
         """
         if not operations:
             raise MutationError("No operations to send.")
+        # GoogleAdsService.mutate reaches EVERY service through its oneof, so
+        # without this the allowlist would stop at the door of the one request
+        # that can touch the most. Each operation's service must be allowed.
+        for operation in operations:
+            self.service(_service_of_mutate_operation(operation))
 
         target = self.resolve_customer_id(customer_id)
         service = self.service("GoogleAdsService")
@@ -344,7 +393,35 @@ _REQUEST_TYPES = {
     "mutate_ad_groups": "MutateAdGroupsRequest",
     "mutate_ad_group_ads": "MutateAdGroupAdsRequest",
     "mutate_ad_group_criteria": "MutateAdGroupCriteriaRequest",
+    "mutate_campaign_criteria": "MutateCampaignCriteriaRequest",
+    "mutate_shared_criteria": "MutateSharedCriteriaRequest",
+    "mutate_campaign_shared_sets": "MutateCampaignSharedSetsRequest",
+    "mutate_campaign_assets": "MutateCampaignAssetsRequest",
+    "mutate_ad_group_assets": "MutateAdGroupAssetsRequest",
+    "mutate_labels": "MutateLabelsRequest",
+    "mutate_campaign_labels": "MutateCampaignLabelsRequest",
+    "mutate_ad_group_labels": "MutateAdGroupLabelsRequest",
+    "mutate_ad_group_ad_labels": "MutateAdGroupAdLabelsRequest",
+    "mutate_ad_group_criterion_labels": "MutateAdGroupCriterionLabelsRequest",
+    "dismiss_recommendation": "DismissRecommendationRequest",
 }
+
+#: Methods whose request has no validate_only field. With apply=False they are
+#: not sent at all -- there is no way to ask Google "would this work" -- and
+#: the result says so rather than pretending to a server-side check.
+NO_VALIDATE_ONLY = frozenset({"dismiss_recommendation"})
+
+
+def _service_of_mutate_operation(operation: Any) -> str:
+    """campaign_asset_operation -> CampaignAssetService."""
+    try:
+        fields = type(operation).pb(operation).ListFields()
+    except Exception as exc:  # noqa: BLE001
+        raise MutationError(f"Not a MutateOperation: {operation!r}") from exc
+    if not fields:
+        raise MutationError("An empty MutateOperation cannot be sent.")
+    name = fields[0][0].name.removesuffix("_operation")
+    return "".join(word.capitalize() for word in name.split("_")) + "Service"
 
 
 def _request_type_for(method: str) -> str:

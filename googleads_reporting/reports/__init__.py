@@ -63,9 +63,23 @@ class Report:
         date_condition: str | None = None,
         extra_where: tuple[str, ...] = (),
         limit: int | None = None,
+        segment_by_date: bool | None = None,
     ) -> Query:
-        """Assemble this report's :class:`~googleads_reporting.query.Query`."""
+        """Assemble this report's :class:`~googleads_reporting.query.Query`.
+
+        ``segment_by_date``: None keeps the report as declared (what the CLI
+        has always produced); True puts ``segments.date`` first so there is a
+        row per entity per day; False drops it, so there is one row per entity
+        over the whole window. The date WHERE condition applies either way.
+        """
         where = list(self.base_where)
+        select, order_by = self.select, self.order_by
+        if segment_by_date is not None and self.supports_date_range:
+            select = tuple(p for p in select if p != "segments.date")
+            order_by = tuple(o for o in order_by if o.split()[0] != "segments.date")
+            if segment_by_date:
+                select = ("segments.date", *select)
+                order_by = ("segments.date", *order_by)
 
         if self.supports_date_range:
             where.append(date_condition or during(self.default_range))
@@ -78,10 +92,10 @@ class Report:
         where.extend(extra_where)
 
         return Query(
-            select=self.select,
+            select=select,
             from_resource=self.resource,
             where=tuple(where),
-            order_by=self.order_by,
+            order_by=order_by,
             limit=limit,
         )
 
@@ -89,9 +103,24 @@ class Report:
 from .accounts import ACCOUNTS  # noqa: E402  (import after Report is defined)
 from .campaigns import CAMPAIGNS  # noqa: E402
 from .keywords import KEYWORDS  # noqa: E402
+from .performance import (  # noqa: E402
+    AD_GROUPS,
+    ADS,
+    ASSETS,
+    AUDIENCES,
+    CONVERSIONS_BY_ACTION,
+    DEVICES,
+    HOUR_OF_DAY,
+    LOCATIONS,
+    SEARCH_TERMS,
+)
 
 REGISTRY: dict[str, Report] = {
-    report.name: report for report in (ACCOUNTS, CAMPAIGNS, KEYWORDS)
+    report.name: report
+    for report in (
+        ACCOUNTS, CAMPAIGNS, KEYWORDS, AD_GROUPS, ADS, SEARCH_TERMS, LOCATIONS,
+        DEVICES, HOUR_OF_DAY, AUDIENCES, ASSETS, CONVERSIONS_BY_ACTION,
+    )
 }
 
 

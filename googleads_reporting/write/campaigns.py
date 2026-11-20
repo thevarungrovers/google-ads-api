@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from ..query import Query
 from .client import MutatingGoogleAdsClient, MutationError
 from .lookup import Candidate, NotFound, resolve, search
@@ -178,6 +180,33 @@ def plan_set_budget(
     return plan
 
 
+
+def set_run_dates(campaign, start_date: str | None, end_date: str | None) -> None:
+    """Set a campaign's first and last serving day from ``YYYY-MM-DD`` strings.
+
+    The API version this library pins has no ``start_date``/``end_date``: they
+    are ``start_date_time``/``end_date_time``, "yyyy-MM-dd HH:mm:ss" in the
+    ACCOUNT's time zone. Assigning the old names onto a proto-plus message
+    raises at build time, so every campaign created with dates failed. The end
+    is the last second of the day, so an end date means "serves through it",
+    which is what the old date-only field meant.
+    """
+    if start_date:
+        campaign.start_date_time = f"{_iso_day(start_date, 'start_date')} 00:00:00"
+    if end_date:
+        campaign.end_date_time = f"{_iso_day(end_date, 'end_date')} 23:59:59"
+
+
+def _iso_day(value: str, name: str) -> str:
+    try:
+        return dt.date.fromisoformat(value.strip()).isoformat()
+    except ValueError as exc:
+        # MutationError, not ValueError: every caller (manage.py included)
+        # turns a MutationError into a clean refusal, and a bare ValueError
+        # escaped as a traceback.
+        raise MutationError(f"{name} must be YYYY-MM-DD, got {value!r}.") from exc
+
+
 def plan_create(
     client: MutatingGoogleAdsClient,
     *,
@@ -212,10 +241,7 @@ def plan_create(
     # Manual CPC with no bid set is the least opinionated starting point; a
     # smart bidding strategy needs conversion history this campaign has none of.
     campaign.manual_cpc.enhanced_cpc_enabled = False
-    if start_date:
-        campaign.start_date = start_date.replace("-", "")
-    if end_date:
-        campaign.end_date = end_date.replace("-", "")
+    set_run_dates(campaign, start_date, end_date)
 
     changes = [
         FieldChange("name", None, name),

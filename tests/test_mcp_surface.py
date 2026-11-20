@@ -18,6 +18,24 @@ READ_TOOLS = frozenset({
     "run_report",
     "get_guardrails",
     "list_my_changes",
+    # state of the account, for deciding what to change
+    "get_campaign",
+    "get_ad_group",
+    "list_keywords",
+    "list_negative_keywords",
+    "list_shared_negative_lists",
+    "list_ads",
+    "list_assets",
+    "list_labels",
+    "list_audiences",
+    "list_conversion_actions",
+    "find_locations",
+    "find_languages",
+    # what changed, what Google suggests, and the read-only escape hatch
+    "list_recommendations",
+    "list_recent_changes",
+    "reconcile_ledger",
+    "run_gaql",
 })
 
 PREVIEW_TOOLS = frozenset({
@@ -25,6 +43,40 @@ PREVIEW_TOOLS = frozenset({
     "preview_campaign_daily_budget",
     "preview_ad_group_status",
     "preview_ad_group_cpc_bid",
+    # keywords and search terms
+    "preview_add_keywords",
+    "preview_keyword_status",
+    "preview_keyword_cpc_bid",
+    "preview_add_negative_keywords",
+    "preview_add_to_shared_negative_list",
+    "preview_link_shared_negative_list",
+    # bidding and budgets
+    "preview_bidding_strategy",
+    "preview_shared_budget_amount",
+    # targeting
+    "preview_campaign_locations",
+    "preview_campaign_languages",
+    "preview_ad_schedule",
+    "preview_device_bid_modifier",
+    "preview_location_bid_modifier",
+    "preview_audience_targeting",
+    "preview_campaign_networks",
+    # ads and assets
+    "preview_create_responsive_search_ad",
+    "preview_ad_status",
+    "preview_replace_responsive_search_ad",
+    "preview_add_sitelinks",
+    "preview_add_callouts",
+    "preview_add_structured_snippets",
+    # creation and naming
+    "preview_create_campaign",
+    "preview_create_ad_group",
+    "preview_rename_campaign",
+    "preview_rename_ad_group",
+    # recommendations
+    "preview_recommendation",
+    # the general low-risk tool
+    "preview_low_risk_change",
 })
 
 APPLY_TOOLS = frozenset({
@@ -32,6 +84,40 @@ APPLY_TOOLS = frozenset({
     "apply_campaign_daily_budget",
     "apply_ad_group_status",
     "apply_ad_group_cpc_bid",
+    # keywords and search terms
+    "apply_add_keywords",
+    "apply_keyword_status",
+    "apply_keyword_cpc_bid",
+    "apply_add_negative_keywords",
+    "apply_add_to_shared_negative_list",
+    "apply_link_shared_negative_list",
+    # bidding and budgets
+    "apply_bidding_strategy",
+    "apply_shared_budget_amount",
+    # targeting
+    "apply_campaign_locations",
+    "apply_campaign_languages",
+    "apply_ad_schedule",
+    "apply_device_bid_modifier",
+    "apply_location_bid_modifier",
+    "apply_audience_targeting",
+    "apply_campaign_networks",
+    # ads and assets
+    "apply_create_responsive_search_ad",
+    "apply_ad_status",
+    "apply_replace_responsive_search_ad",
+    "apply_add_sitelinks",
+    "apply_add_callouts",
+    "apply_add_structured_snippets",
+    # creation and naming
+    "apply_create_campaign",
+    "apply_create_ad_group",
+    "apply_rename_campaign",
+    "apply_rename_ad_group",
+    # recommendations
+    "apply_recommendation",
+    # the general low-risk tool
+    "apply_low_risk_change",
     "revert_change",
 })
 
@@ -132,9 +218,25 @@ def test_applies_are_not_marked_read_only(tools):
         assert tools[name].annotations.read_only_hint is False, name
 
 
+#: Applies that cannot move money or stop delivery, and so are NOT marked
+#: destructive -- crying wolf on a rename trains people to click through the
+#: loud prompts. Pinned by name: anything not listed here must be destructive.
+NON_DESTRUCTIVE_APPLIES = frozenset({
+    "revert_change",
+    "apply_rename_campaign",
+    "apply_rename_ad_group",
+    "apply_low_risk_change",
+})
+
+
 def test_money_moving_applies_are_marked_destructive(tools):
-    for name in APPLY_TOOLS - {"revert_change"}:
+    for name in APPLY_TOOLS - NON_DESTRUCTIVE_APPLIES:
         assert tools[name].annotations.destructive_hint is True, name
+
+
+def test_the_non_destructive_applies_really_are(tools):
+    for name in NON_DESTRUCTIVE_APPLIES:
+        assert tools[name].annotations.destructive_hint is False, name
 
 
 def test_revert_is_not_marked_destructive(tools):
@@ -245,9 +347,14 @@ def test_read_only_mode_publishes_no_write_tool():
     )
 
 
+#: The one tool allowed to name a query: a READ passthrough. Deliberately listed
+#: by name -- any other tool matching the words below is still a failure.
+READ_PASSTHROUGH = frozenset({"run_gaql"})
+
+
 def test_there_is_no_passthrough_tool(tools):
     """An unregistered operation must be unreachable, not merely undocumented."""
-    for name in tools:
+    for name in set(tools) - READ_PASSTHROUGH:
         assert not any(
             word in name.lower()
             for word in ("mutate", "execute", "query", "raw", "request", "gaql")
@@ -262,10 +369,36 @@ def test_no_tool_can_remove_an_entity(tools):
         ), name
 
 
-def test_no_tool_creates_a_campaign(tools):
-    """Creation carries media and a legal declaration a human answers for."""
+#: Every tool allowed to CREATE something, by name. Creation is allowed now
+#: (agent-parity), but only through these, each created PAUSED where Google
+#: has a status, and each costing 3 applies against the caps.
+CREATION_TOOLS = frozenset({
+    "preview_create_responsive_search_ad",
+    "apply_create_responsive_search_ad",
+    "preview_create_campaign",
+    "apply_create_campaign",
+    "preview_create_ad_group",
+    "apply_create_ad_group",
+})
+
+
+def test_only_the_pinned_tools_create_anything(tools):
     for name in tools:
-        assert "create" not in name.lower(), name
+        if "create" in name.lower():
+            assert name in CREATION_TOOLS, f"{name} creates but is not pinned"
+
+
+def test_creation_previews_say_what_is_created_paused(tools):
+    for name in CREATION_TOOLS:
+        if name.startswith("preview_"):
+            assert "PAUSED" in (tools[name].title or "") + (tools[name].description or ""), name
+
+
+def test_creation_applies_are_destructive_and_say_they_cost_three(tools):
+    for name in CREATION_TOOLS:
+        if name.startswith("apply_"):
+            assert tools[name].annotations.destructive_hint is True, name
+            assert "3 applies" in (tools[name].title or ""), name
 
 
 def test_every_tool_has_a_description(tools):
@@ -278,3 +411,71 @@ def test_the_server_instructions_state_the_workflow():
     assert "preview" in text and "apply" in text
     assert "decimal string" in text.lower()
     assert "never pass micros" in text.lower()
+
+
+def test_the_instructions_cover_the_caps_removal_and_error_prefixes():
+    text = server.INSTRUCTIONS
+    for phrase in ("daily", "local midnight", "NOTHING IS EVER REMOVED", "PAUSED",
+                   "AUTH_EXPIRED", "QUOTA", "INVALID_QUERY", "NOT_FOUND", "POLICY",
+                   "TRANSIENT", "EU political"):
+        assert phrase in text, phrase
+    assert "restart the server" not in text.lower()
+
+
+def test_every_pair_is_named_in_the_instructions():
+    """An agent cannot use a tool its instructions never mention."""
+    text = server.INSTRUCTIONS.replace("\n", " ").replace(" ", "")
+    for name in PREVIEW_TOOLS:
+        assert name.removeprefix("preview_") in text, name
+
+
+def test_find_campaigns_status_is_an_enum_not_free_text(tools):
+    """The value is interpolated into GAQL; a free string was injectable."""
+    schema = tools["find_campaigns"].input_schema["properties"]["status"]
+    options = schema.get("anyOf", [schema])
+    enums = [o.get("enum") for o in options if o.get("enum")]
+    assert enums == [["ENABLED", "PAUSED", "REMOVED"]], schema
+
+
+def test_the_read_passthrough_cannot_write(tools):
+    """run_gaql is read-only by construction, and annotated as such."""
+    assert tools["run_gaql"].annotations.read_only_hint is True
+    assert tools["run_gaql"].annotations.destructive_hint is False
+    assert READ_PASSTHROUGH <= READ_TOOLS
+
+
+def test_the_readme_counts_the_real_tool_split():
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert len(APPLY_TOOLS) == len(PREVIEW_TOOLS) + 1  # the pairs, plus revert_change
+    assert (
+        f"**{len(EXPECTED)} tools: {len(READ_TOOLS)} that read, "
+        f"{len(PREVIEW_TOOLS)} preview/apply pairs, and undo.**"
+    ) in readme
+
+
+def test_only_whole_entities_weigh_three():
+    """The docs say which creations cost 3 applies; keep them honest."""
+    from googleads_mcp.changes import all_kinds
+
+    heavy = {k.name for k in all_kinds() if k.weight == 3}
+    assert heavy == {"create_campaign", "create_ad_group", "create_responsive_search_ad",
+                     "replace_responsive_search_ad"}
+    light = {k.name: k.weight for k in all_kinds()
+             if k.name in ("add_keywords", "add_sitelinks", "add_callouts",
+                           "add_structured_snippets")}
+    assert set(light.values()) == {1}, light
+
+
+def test_every_kind_that_creates_a_named_entity_declares_creates_named():
+    """The engine's prefix backstop only runs for kinds that declare what they
+    name, so a creating kind that forgot would ship unprefixed. Read off the
+    ledger keys: a kind that records a creation of a named type must say so."""
+    from googleads_mcp.changes import all_kinds
+
+    named = {"campaign": "campaign", "ad group": "ad_group", "label": "label"}
+    for kind in all_kinds():
+        made = {named[t] for t, f in kind.ledger_keys if f in ("created", "create") and t in named}
+        assert made <= set(kind.creates_named), (kind.name, made, kind.creates_named)
+

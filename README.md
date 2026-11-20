@@ -62,7 +62,8 @@ cd google-ads-api
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
-# 2. Fill in your credentials
+# 2. Fill in your credentials (and, optionally, the two naming keys --
+#    see "Naming what the agent creates")
 cp .env.example .env
 chmod 600 .env
 
@@ -87,6 +88,7 @@ before the venv exists.
 | OAuth client ID + secret | yes | Google Cloud Console |
 | Customer ID | yes | The 10-digit id of the account to work on |
 | Login customer ID | only sometimes | A manager account's id, if you reach the target *through* it |
+| Owner initials, agent name | optional | You choose them: `GOOGLE_ADS_MCP_OWNER_INITIALS` (2-4 capitals) and `GOOGLE_ADS_MCP_AGENT_NAME` (a lowercase slug) in `.env`. Leave both empty for plain names. See [Naming what the agent creates](#naming-what-the-agent-creates) |
 
 > **Do the whole Cloud Console part in ONE project, and write down which one.**
 > API access attaches to the project that issued your OAuth client. A client
@@ -112,8 +114,8 @@ touch. What that means depends on the agent:
 
 | Agent | Saying Y does this |
 |---|---|
-| Claude Code | The 10 safe tools stop asking permission. The 5 that change things still ask, every time |
-| Claude Desktop, Cursor, Codex | The 5 tools that change things are not even given to the agent. It cannot call them |
+| Claude Code | The 53 safe tools (reads and previews) stop asking permission. The 32 that change things still ask, every time |
+| Claude Desktop, Cursor, Codex | The 32 tools that change things are not even given to the agent. It cannot call them |
 
 That difference is not a preference — Claude Code is the only one of the four
 that can be told "allow this tool, ask about that one". For the others the
@@ -200,7 +202,9 @@ other MCP servers. Running it twice does nothing the second time.
 # The same, then a typed confirmation before it applies
 ./.venv/bin/python scripts/manage.py campaign set-budget --name "brand - search" --amount 2.50
 
-# Build a whole campaign, interactively, in one atomic request
+# Build a whole campaign, interactively, in one atomic request.
+# With GOOGLE_ADS_MCP_OWNER_INITIALS=AB in .env, a campaign named
+# "spring_promo" here is created as "AB-cli-spring_promo"
 ./.venv/bin/python scripts/manage.py campaign new
 ```
 
@@ -215,41 +219,179 @@ rejected change costs an error message instead of a half-made edit.
 
 ## What the agent can do
 
-**15 tools: 6 that read, 4 preview/apply pairs, and undo.**
+**85 tools: 22 that read, 31 preview/apply pairs, and undo.** The full,
+pinned list is in `tests/test_mcp_surface.py`; `.claude/skills/google-ads/SKILL.md`
+describes each.
 
 ### Can read (safe)
 
-| Tool | Gives you |
+| Tools | Give you |
 |---|---|
-| `list_accounts` | Which accounts the credentials reach |
-| `find_campaigns` | Campaigns **and their ids** |
-| `find_ad_groups` | Ad groups and their ids |
-| `run_report` | Performance: accounts, campaigns or keywords |
-| `get_guardrails` | The limits, and what is left of this session's budget |
-| `list_my_changes` | What the server changed, with ids for undo |
+| `list_accounts`, `find_campaigns`, `find_ad_groups` | Accounts, campaigns and ad groups **with their ids**, who named each, and whether the server created it. Filter with `origin`, `agent_name`, `owner`, `mine` |
+| `get_campaign`, `get_ad_group` | One entity in full: status reasons, bidding, budget (shared? limited by it?), networks, locations, schedule, 7/30-day totals |
+| `run_report` | 12 reports -- campaigns, ad groups, keywords, search terms, ads, locations, devices, hour of day, audiences, assets, conversions by action, accounts. One row per entity by default; never truncates silently |
+| `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists`, `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions`, `find_locations`, `find_languages` | Current state, and the ids the write tools take. `list_labels` takes the same naming filters as `find_campaigns` |
+| `list_recommendations`, `list_recent_changes` | Google's suggestions; who changed what in the UI |
+| `reconcile_ledger` | Which of the server's changes someone has since moved, and (with a naming prefix configured) which of its entities lost the prefix or carry it without a ledger record |
+| `run_gaql` | Any read-only GAQL query, row-limited |
+| `get_guardrails`, `list_my_changes` | The limits and what is left of today's and this session's budget, and the naming identity in use; what the server changed |
 
 ### Can change (needs your yes)
 
-| What | Tools |
+Each is a `preview_*` / `apply_*` pair.
+
+| Area | Changes |
 |---|---|
-| Pause or enable a campaign | `preview_campaign_status` / `apply_campaign_status` |
-| A campaign's daily budget | `preview_campaign_daily_budget` / `apply_campaign_daily_budget` |
-| Pause or enable an ad group | `preview_ad_group_status` / `apply_ad_group_status` |
-| An ad group's CPC bid | `preview_ad_group_cpc_bid` / `apply_ad_group_cpc_bid` |
-| Undo one change | `revert_change` |
+| Status | Pause or enable a campaign, ad group, keyword or ad |
+| Money | Campaign daily budget, **shared** budget (lists every campaign it feeds), ad group and keyword CPC bids, bidding strategy and target CPA / ROAS |
+| Keywords | Add keywords (created paused), negative keywords at campaign or ad group level, shared negative lists |
+| Targeting | Locations, languages, ad schedule, device and location bid modifiers, Search Partners / Display expansion, audience segments |
+| Ads | Create a responsive search ad (paused), "edit" one (new ad + pause the old, in one request), sitelinks, callouts, structured snippets |
+| Creation | A whole Search or Display campaign (responsive or uploaded image ads) in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames of the agent's **own** campaigns and ad groups. Names get the configured prefix |
+| Recommendations | Act on one of Google's recommendations, held to the bounds of the change it amounts to |
+| Low-risk edits | Labels, final URL suffix, tracking template, dismissing a recommendation (one tool, closed allowlist) |
+| Undo | `revert_change` -- one entry, or a whole batch |
+
+A new campaign, ad group or responsive search ad starts **PAUSED** and costs 3
+changes against the limits, so going live is a separate approval. Keywords cost
+1 and start paused unless the preview asked for them enabled. Sitelinks,
+callouts and structured snippets cost 1 and are **live as soon as they are
+linked** -- assets have no paused state. An "edited" RSA costs 3 and its new ad
+keeps the old ad's status.
 
 ### Cannot do at all
 
-Creating or removing campaigns, ad groups and ads. Setting anything to REMOVED.
-Changing a **shared** budget, which would quietly move every campaign using it.
-Anything touching billing or account access — those are not on the write
-client's allowlist at all.
+Removing campaigns, ad groups, ads or budgets, or setting anything to REMOVED
+-- pausing is the undo. (The one narrow exception: undoing a keyword, negative,
+location or link **the server itself added** removes exactly that criterion,
+traced through its own ledger. That removal is not itself reverted: to have
+the criterion back, add it again with its `preview_*` tool.) Anything touching billing, account access or
+conversion-action settings -- those are not on the write client's allowlist at
+all. Video campaigns, which Google's API refuses to create.
 
 **There is no general-purpose "run any mutation" tool**, so anything without its
 own tool simply cannot be reached. A test pins the exact list.
 
-Creating a campaign is a human job (`scripts/manage.py campaign new`), because it
-carries media and a legal declaration somebody has to answer for.
+---
+
+## Naming what the agent creates
+
+A month after an agent created a campaign, nobody can tell it from one a person
+made by hand. So everything the server creates with a name starts with **who**
+made it:
+
+```
+<OWNER>-<agent>-<base>
+AB-max-spring_promo          <- placeholder values
+```
+
+The agent passes only the base (`spring_promo`); the server puts the prefix in
+front, and the preview shows the **exact** final name in its `naming` block
+before anyone approves it. The base keeps whatever separators it had --
+underscores, spaces, hyphens. The prefix always goes first, in front of any
+house naming style the base follows.
+
+### Setting it up
+
+Two keys in this repository's `.env` (`.env.example` lists them, empty):
+
+| Key | Format | Example |
+|---|---|---|
+| `GOOGLE_ADS_MCP_OWNER_INITIALS` | 2-4 uppercase letters | `AB` |
+| `GOOGLE_ADS_MCP_AGENT_NAME` | lowercase letters, digits or `_`, 2-24 characters, starting with a letter, no `-`; `cli` and `manual` are reserved | `max` |
+
+Each part is used only when it is set, so **leaving them empty is fine**:
+
+| Set in `.env` | A campaign asked for as `spring_promo` is named |
+|---|---|
+| both | `AB-max-spring_promo` |
+| initials only | `AB-spring_promo` |
+| agent name only | `max-spring_promo` |
+| neither | `spring_promo`, exactly as given |
+
+A value that is set but malformed (initials `a1`, an agent name with a `-`)
+refuses every create and rename at preview, naming the key to fix -- a bad
+prefix would make every later name ambiguous. The server prints the problem at
+startup too.
+
+The identity is read from `.env` (and from `config.env`, if you keep one; `.env`
+wins) and **nothing else**: a value in the MCP client's `env` block is ignored,
+with a warning at startup when it disagrees. So there is **one identity per
+checkout** -- a second agent needs its own checkout with its own `.env`.
+
+### What gets a prefix
+
+| Entity | Prefixed | Longest final name (prefix included) |
+|---|---|---|
+| Campaign | yes; its budget is named `<campaign name> budget` | 248 UTF-8 bytes |
+| Ad group (alone, or inside a new campaign) | yes | 254 characters |
+| Label | yes | 80 characters |
+| Shared budget (CLI `budget create` only) | yes, `<OWNER>-cli-` | 255 UTF-8 bytes |
+| Responsive search ad | no -- RSAs have no name in the API | -- |
+| Keywords, negatives, sitelinks, callouts, snippets, targeting | no -- no name field | -- |
+
+A name over the limit is **refused, never truncated** -- the preview says how
+long the base may be, in the limit's own unit (bytes for a campaign, characters
+for an ad group). Passing a name that already carries your prefix does not
+double it. Also refused, at preview:
+
+- **another identity's prefix** (`CD-bot-...`, `AB-cli-...`) -- **even when no
+  identity is configured**: with neither key set the name is used as given,
+  but never one that would attribute it to somebody else;
+- **a prefix twice** -- `AB-max-AB-max-x`, or `AB-max-CD-bot-x`: after your
+  prefix is taken off once, what is left must be a plain base;
+- with **initials only**, a base that starts with a lowercase word and a `-`
+  (`bot-x` would make `AB-bot-x`, which reads as agent `bot`'s) -- use `_` or
+  reorder it;
+- a prefix **spelt with look-alike characters** -- `CД-bot-x` (Cyrillic),
+  `CD‑bot-x` (a non-ASCII dash), `ＣＤ-bot-x` (fullwidth), or your own
+  prefix disguised the same way. Only the head where a prefix would sit is
+  checked: `Café-Paris-promo` or `Summer – Sale` are used as given, and
+  anything after a valid prefix may be any visible text;
+- control and invisible characters (a zero-width space, a line separator, a
+  Hangul filler, a variation selector, a blank Braille pattern) and any space
+  other than the plain one (a no-break space, an ideographic space), which
+  would make two names that look the same differ.
+
+As a last check, every preview that creates something reads the names off the
+**request it would send** -- the campaign, its budget, every nested ad group --
+and fails (`name_prefix`, `names_sent`) if one lacks the prefix, breaks a rule
+above, or differs from the names the preview shows.
+
+**The CLI** (`scripts/manage.py`) stamps what a person creates
+`<OWNER>-cli-<base>` when the initials are set, and leaves the name plain when
+they are not -- `cli` only tells a person from an agent under the same owner.
+It prints the identity it will use before you confirm.
+
+### Renames
+
+The agent may rename **only its own** campaigns and ad groups: ones whose name
+carries its prefix, or that its ledger shows -- **by id** -- it created. A name
+that reads as another identity's full `OWNER-agent-` prefix is never its own,
+even when it starts with its prefix (with initials `AB` only, `AB-bot-x` and
+`AB-cli-x` are not yours) and even when the ledger shows it created it. A
+campaign made by hand, or by another agent, is refused in the preview -- rename
+those in the Google Ads UI. The prefix is kept on a rename (only the base changes), and one that a person
+removed in the UI is put back. Undoing a rename restores the exact old name.
+
+### Finding things by who made them
+
+`find_campaigns`, `find_ad_groups` and `list_labels` take:
+
+| Argument | Keeps |
+|---|---|
+| `origin="agent"` / `"cli"` / `"manual"` | names with an agent prefix / a `-cli-` prefix / no prefix |
+| `agent_name="max"` | names with that agent part |
+| `owner="AB"` | names starting `AB-` |
+| `mine=True` | names with **this** server's prefix -- and not another identity's full form, so initials-only `AB` does not match `AB-bot-x` |
+
+Every row also carries `origin`, `owner`, `agent` and `base` parsed from the
+name, and `ledger_created`. The name is a convention anyone can type; the
+ledger is the proof. With a prefix configured, `reconcile_ledger` adds a
+`naming` section: `prefix_lost` (created here, but the live name has lost the
+prefix -- including ones created before names carried one), `prefix_without_ledger`
+(the name has the prefix, the ledger has no record), and a count of other
+identities' prefixes. It reports; it never renames anything.
 
 ---
 
@@ -261,7 +403,7 @@ carries media and a legal declaration somebody has to answer for.
 | `before` / `after` | In real money, already converted out of micros |
 | `metrics_7d` | What it has actually been doing |
 | `projected_daily_spend_delta` | Roughly how much more per day |
-| `checks` | One line per limit, `OK` or `FAIL` |
+| `checks` | One line per limit, `OK`, `FAIL` or `SKIP` -- including Google's own verdict (`google_validate_only`) and what the change uses of today's remaining total |
 | `blocked` | `true` means a limit was hit and the apply will refuse |
 
 Two things worth saying out loud when you summarise one:
@@ -301,8 +443,26 @@ change somebody can see, not an environment variable set once and forgotten.
 | `max_projected_session_delta` | 150.00 |
 
 **These are the ones that matter.** A per-change limit does nothing against a
-loop making 400 perfectly legal changes. These do. They reset only when the
-server restarts.
+loop making 400 perfectly legal changes. These do. They reset when the server
+restarts -- which is why there is also a daily limit.
+
+### 2b. Limits per day
+
+| Limit | Default |
+|---|---|
+| `max_applies_per_day` | 40 |
+| `max_projected_delta_per_day_total` | 200.00 |
+
+Counted from the change log for the **local** calendar day, across every
+server process, so a restart does not reset them. A batch counts once, a
+creation three times, an undo once. **Re-enabling** something paused is exempt
+from the per-change `max_projected_delta_per_day` and counted in full here
+instead -- otherwise a campaign with a budget over 50/day could never be turned
+back on. Keep this total at least as large as your biggest campaign budget; the
+server warns at startup if it is not.
+
+Also new: `max_target_cpa` (100.00), `max_target_change_pct` (25, either
+direction) and `max_bid_modifier_pct` (50).
 
 ### 3. Scope
 
@@ -365,6 +525,17 @@ revert_change(entry_id="...")
 Refuses if the change never applied, if it has already been undone, or if
 **somebody else moved the value since** — in that last case undoing yours would
 throw away theirs.
+
+A revert is not free. Undoing a cut, a pause or anything that narrowed delivery
+projects the spend it puts back. Reverting a **revert** re-applies the original
+change, so it costs what that change cost -- a change that both narrowed and
+widened (Search Partners off and Display on) is not free to re-apply -- and it
+is held to the per-change limit and the kind's own checks again. Down a chain
+of reverts, only every other step re-applies the change; the steps between
+only restore the state before it, and like any undo are exempt from the
+per-change limit (never from the session and daily totals). A negative
+recorded before the ledger kept the campaigns it narrowed is reverted only when
+its campaign can be read off the row; otherwise the revert is refused.
 
 ---
 

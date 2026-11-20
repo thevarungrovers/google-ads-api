@@ -73,7 +73,16 @@ def execute(
     apply: bool = False,
     customer_id: str | None = None,
 ) -> MutationResult:
-    """Send ``plan``. Validates server-side unless ``apply`` is True."""
+    """Send ``plan``. Validates server-side unless ``apply`` is True.
+
+    A plan addressed to GoogleAdsService is a multi-service ATOMIC request
+    (MutateOperations wired by temp ids -- an asset and the link to it), so it
+    goes through mutate_atomic; everything else is one service's own mutate.
+    """
+    if plan.service == "GoogleAdsService":
+        return client.mutate_atomic(
+            plan.operations, customer_id=customer_id, apply=apply, describe=plan.describe()
+        )
     return client.mutate(
         service_name=plan.service,
         method=plan.method,

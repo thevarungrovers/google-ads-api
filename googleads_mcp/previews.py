@@ -56,6 +56,16 @@ class ChangePreview(BaseModel):
     blocked: bool = Field(description="True when a check failed; apply would refuse")
     warnings: list[str] = []
     note: str | None = None
+    items: list[dict[str, Any]] | None = Field(
+        default=None, description="For a batch: one entry per entity it touches"
+    )
+    naming: dict[str, Any] | None = Field(
+        default=None,
+        description="For a create or rename: the exact name that will be sent, and why",
+    )
+    apply_weight: int = Field(
+        default=1, description="Applies this costs against the session and daily caps"
+    )
 
 
 class ApplyResult(BaseModel):
@@ -71,6 +81,21 @@ class ApplyResult(BaseModel):
     after: str
     resource_name: str | None = None
     session: dict[str, Any] = Field(description="Session budget left after this")
+    batch_id: str | None = Field(
+        default=None,
+        description="For a batch: pass to revert_change to undo the whole batch",
+    )
+    entry_ids: list[str] = Field(
+        default=[], description="For a batch: one ledger id per entity"
+    )
+    resource_names: list[str] = []
+    daily: dict[str, Any] | None = Field(
+        default=None, description="Today's change budget left after this"
+    )
+    projected_daily_spend_delta: str | None = Field(
+        default=None,
+        description="For a revert: the spend it restores (undoing a pause or a cut)",
+    )
 
 
 class PreviewExpired(RuntimeError):
@@ -141,7 +166,8 @@ class PreviewStore:
         if pending.tool != tool:
             raise PreviewExpired(
                 f"That token was minted for {pending.tool}, not {tool}. Tokens "
-                "are not interchangeable between tools."
+                "are not interchangeable between tools, and this one is now spent: "
+                f"take a fresh preview for {pending.tool.replace('apply_', 'preview_', 1)}."
             )
         if pending.blocked:
             raise PreviewExpired(

@@ -1,12 +1,18 @@
 """Hard bounds on what the server will apply, and the session budget.
 
-Two kinds of limit, and the second matters more:
+Three kinds of limit, and the last two matter more:
 
 * **Per-call** -- this budget is not above X, this bid is not a 10x jump. They
   catch a fat finger or a misread number.
 * **Per-session** -- at most N applies, at most X total projected daily spend
   added. A per-call limit does nothing against a loop making four hundred
   individually-legal changes, which is the failure mode an agent actually has.
+* **Per-day** -- the same two bounds for the local calendar day, counted from
+  the ledger rather than from memory. The session counters reset whenever the
+  server process restarts, and an agent in continuous use restarts it often --
+  one per client window, one per crash -- so on their own they bound a session
+  and nothing longer. The daily cap survives restarts and is shared by every
+  process writing to logs/google-ads.db.
 
 Values come from ``guardrails.toml`` at the repo root, falling back to the
 constants below. A key that is misspelled raises at startup rather than being
@@ -18,6 +24,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+import datetime as dt
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -37,6 +44,15 @@ DEFAULTS: dict[str, object] = {
     "max_projected_delta_per_day": Decimal("50.00"),
     "max_applies_per_session": 20,
     "max_projected_session_delta": Decimal("150.00"),
+    "max_applies_per_day": 40,
+    "max_projected_delta_per_day_total": Decimal("200.00"),
+    # bidding strategies: a target CPA above this is refused, and a target
+    # (CPA or ROAS) may move at most this far in one change -- Google's own
+    # guidance is ~20% at a time, or the learning period restarts
+    "max_target_cpa": Decimal("100.00"),
+    "max_target_change_pct": 25.0,
+    # location / device / schedule bid modifiers: +/- this many percent at most
+    "max_bid_modifier_pct": 50.0,
 }
 
 _DECIMAL_KEYS = {
@@ -44,9 +60,14 @@ _DECIMAL_KEYS = {
     "max_cpc_bid",
     "max_projected_delta_per_day",
     "max_projected_session_delta",
+    "max_projected_delta_per_day_total",
+    "max_target_cpa",
 }
-_FLOAT_KEYS = {"max_budget_change_pct", "max_bid_increase_pct"}
-_INT_KEYS = {"max_entities_per_call", "max_applies_per_session"}
+_FLOAT_KEYS = {
+    "max_budget_change_pct", "max_bid_increase_pct", "max_target_change_pct",
+    "max_bid_modifier_pct",
+}
+_INT_KEYS = {"max_entities_per_call", "max_applies_per_session", "max_applies_per_day"}
 
 
 class WritesDisabled(RuntimeError):
@@ -71,6 +92,15 @@ class Limits:
     max_projected_delta_per_day: Decimal
     max_applies_per_session: int
     max_projected_session_delta: Decimal
+    # Defaults here as well as in DEFAULTS so a Limits built by hand (the
+    # tests do) without the newer keys still constructs.
+    max_applies_per_day: int = DEFAULTS["max_applies_per_day"]  # type: ignore[assignment]
+    max_projected_delta_per_day_total: Decimal = DEFAULTS[  # type: ignore[assignment]
+        "max_projected_delta_per_day_total"
+    ]
+    max_target_cpa: Decimal = DEFAULTS["max_target_cpa"]  # type: ignore[assignment]
+    max_target_change_pct: float = DEFAULTS["max_target_change_pct"]  # type: ignore[assignment]
+    max_bid_modifier_pct: float = DEFAULTS["max_bid_modifier_pct"]  # type: ignore[assignment]
     allowed_customer_ids: tuple[str, ...] = ()
     allowed_campaign_ids: tuple[str, ...] = ()
     allowed_currencies: tuple[str, ...] = ("CAD",)
@@ -85,6 +115,11 @@ class Limits:
             "max_projected_delta_per_day": str(self.max_projected_delta_per_day),
             "max_applies_per_session": self.max_applies_per_session,
             "max_projected_session_delta": str(self.max_projected_session_delta),
+            "max_applies_per_day": self.max_applies_per_day,
+            "max_projected_delta_per_day_total": str(self.max_projected_delta_per_day_total),
+            "max_target_cpa": str(self.max_target_cpa),
+            "max_target_change_pct": self.max_target_change_pct,
+            "max_bid_modifier_pct": self.max_bid_modifier_pct,
             "allowed_customer_ids": list(self.allowed_customer_ids) or
                 ["(only GOOGLE_ADS_CUSTOMER_ID)"],
             "allowed_campaign_ids": list(self.allowed_campaign_ids) or ["(all)"],
@@ -166,8 +201,14 @@ class Check:
     name: str
     ok: bool
     detail: str
+    #: Deliberately not applied to this change (it still passes). Rendered as
+    #: SKIP so a human reading the preview sees the bound was considered and
+    #: why it does not apply, rather than an OK that suggests it was checked.
+    skipped: bool = False
 
     def render(self) -> str:
+        if self.skipped:
+            return f"SKIP {self.name} ({self.detail})"
         return f"{'OK  ' if self.ok else 'FAIL'} {self.name}: {self.detail}"
 
 
@@ -183,13 +224,18 @@ class SessionCounters:
     def limits(self) -> Limits:
         return self._limits
 
-    def would_exceed(self, projected_delta: Decimal) -> str | None:
-        """Why this apply would break the session budget, or None."""
-        if self.applies + 1 > self._limits.max_applies_per_session:
+    def would_exceed(self, projected_delta: Decimal, weight: int = 1) -> str | None:
+        """Why this apply would break the session budget, or None.
+
+        ``weight`` is what the apply costs: 1 for most, more for a creation.
+        """
+        if self.applies + weight > self._limits.max_applies_per_session:
             return (
                 f"session apply limit reached: {self.applies} of "
-                f"{self._limits.max_applies_per_session} already used. Restart "
-                "the server deliberately if more are genuinely needed."
+                f"{self._limits.max_applies_per_session} already used"
+                + (f" and this one costs {weight}" if weight > 1 else "")
+                + ". Stop and show the human list_my_changes; they decide "
+                "whether this session should do more."
             )
         total = self.projected_delta + max(projected_delta, Decimal("0"))
         if total > self._limits.max_projected_session_delta:
@@ -200,8 +246,8 @@ class SessionCounters:
             )
         return None
 
-    def record(self, projected_delta: Decimal) -> None:
-        self.applies += 1
+    def record(self, projected_delta: Decimal, weight: int = 1) -> None:
+        self.applies += weight
         self.projected_delta += max(projected_delta, Decimal("0"))
 
     def snapshot(self) -> dict[str, object]:
@@ -216,6 +262,104 @@ class SessionCounters:
                     Decimal("0"),
                     self._limits.max_projected_session_delta - self.projected_delta,
                 )
+            ),
+        }
+
+
+def local_midnight_utc(now: dt.datetime | None = None) -> str:
+    """Today's LOCAL midnight, as the UTC ISO string the ledger stores.
+
+    "Today" is the operator's calendar day, not UTC's: after 19:00 or 20:00 in
+    North America the UTC date has already rolled over, and a cap counted in
+    UTC would reset in the middle of their evening. The ledger's `at` column is
+    UTC ISO (logdb._now()), so the boundary is computed in local time here and
+    converted, which keeps the query a plain indexed string comparison.
+
+    A naive datetime's .astimezone() applies the local zone's rules FOR THAT
+    instant, so a DST change between midnight and now is accounted for.
+    """
+    local_now = (now or dt.datetime.now().astimezone()).astimezone()
+    midnight = dt.datetime.combine(local_now.date(), dt.time.min)
+    return midnight.astimezone().astimezone(dt.timezone.utc).isoformat()
+
+
+class DailyUsage:
+    """Today's applies and projected spend, read back from the ledger.
+
+    No table of its own and no in-memory state: every question is answered by
+    the `changes` rows since local midnight, so two server processes -- or a
+    process restarted ten times today -- see the same numbers.
+
+    A batch counts once (rows share a batch_id and each carries the whole
+    batch's delta and weight), a revert counts as one apply carrying the
+    spend it RESTORES (undoing a pause, a cut or any narrowing change puts
+    delivery back, so its delta is that, not zero), and a reduction refunds
+    nothing, exactly as in SessionCounters.
+    """
+
+    def __init__(self, limits: Limits) -> None:
+        self._limits = limits
+
+    def usage(self) -> tuple[int, Decimal]:
+        from googleads_reporting import logdb
+
+        groups: dict[str, dict] = {}
+        for row in logdb.successful_changes_since(local_midnight_utc()):
+            groups.setdefault(row.get("batch_id") or row["entry_id"], row)
+        applies = sum(int(row.get("weight") or 1) for row in groups.values())
+        delta = Decimal("0")
+        for row in groups.values():
+            try:
+                value = Decimal(str(row.get("projected_daily_spend_delta") or "0"))
+            except InvalidOperation:
+                value = Decimal("0")
+            delta += max(value, Decimal("0"))
+        return applies, delta
+
+    def would_exceed(self, projected_delta: Decimal, weight: int = 1) -> str | None:
+        applies, delta = self.usage()
+        if applies + weight > self._limits.max_applies_per_day:
+            return (
+                f"daily apply limit reached: {applies} of "
+                f"{self._limits.max_applies_per_day} already used today (local "
+                "time, across every server process). It resets at local midnight. "
+                "Stop and tell the human; this cap is set in guardrails.toml."
+            )
+        check = self.check(projected_delta, delta)
+        if not check.ok:
+            return (
+                f"daily spend total reached: this change {check.detail} "
+                f"(max_projected_delta_per_day_total = "
+                f"{self._limits.max_projected_delta_per_day_total}, local day, across "
+                "every server process). It resets at local midnight."
+            )
+        return None
+
+    def check(self, projected_delta: Decimal, used: Decimal | None = None) -> Check:
+        """The daily-total line for a preview: "uses X of today's remaining Y".
+
+        Both figures, always: "over the ceiling" alone does not tell a human
+        whether the change is too big or the day is already spent.
+        """
+        if used is None:
+            used = self.usage()[1]
+        remaining = max(Decimal("0"), self._limits.max_projected_delta_per_day_total - used)
+        wanted = max(projected_delta, Decimal("0"))
+        return Check(
+            "max_projected_delta_per_day_total",
+            wanted <= remaining,
+            f"uses {wanted:.2f} of today's remaining {remaining:.2f}",
+        )
+
+    def snapshot(self) -> dict[str, object]:
+        applies, delta = self.usage()
+        return {
+            "day_started_at_utc": local_midnight_utc(),
+            "applies_used": applies,
+            "applies_remaining": max(0, self._limits.max_applies_per_day - applies),
+            "projected_delta": str(delta),
+            "projected_delta_remaining": str(
+                max(Decimal("0"), self._limits.max_projected_delta_per_day_total - delta)
             ),
         }
 
@@ -270,6 +414,21 @@ def check_pct_increase(
     pct = float((after - before) / before * 100)
     ok = pct <= ceiling_pct
     return Check(name, ok, f"{pct:+.1f}% against ceiling +{ceiling_pct:.0f}%")
+
+
+def check_abs_pct_change(
+    name: str, before: Decimal | None, after: Decimal, ceiling_pct: float
+) -> Check:
+    """Like check_pct_increase, but a move in EITHER direction counts.
+
+    For bidding targets, where a big cut is as disruptive as a big raise:
+    either one restarts Google's learning.
+    """
+    if before is None or before == 0:
+        return Check(name, True, "no previous target to compare against")
+    pct = float((after - before) / before * 100)
+    ok = abs(pct) <= ceiling_pct
+    return Check(name, ok, f"{pct:+.1f}% against +/-{ceiling_pct:.0f}%")
 
 
 def check_count(limits: Limits, count: int) -> Check:

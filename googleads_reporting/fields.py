@@ -177,7 +177,11 @@ def coerce(value: Any) -> Any:
     if isinstance(value, (list, tuple)) or (
         hasattr(value, "__iter__") and not isinstance(value, (bytes, str))
     ):
-        return [coerce(item) for item in value]
+        # _coerce_scalar per item, not coerce: a repeated ENUM field holds
+        # IntEnums, which coerce's int fast path would hand back as enum
+        # objects -- serialised as bare numbers, so primary_status_reasons
+        # came out as [11] instead of ["BUDGET_CONSTRAINED"].
+        return [_coerce_scalar(item) for item in value]
     return value
 
 
@@ -209,7 +213,13 @@ def get_field(row: Any, path: str) -> Any:
     """
     current: Any = row
     for part in path.split("."):
-        current = getattr(current, part, _MISSING)
+        parent = current
+        current = getattr(parent, part, _MISSING)
+        if current is _MISSING:
+            # proto-plus renames a field that collides with a Python builtin
+            # or keyword by appending "_": GAQL's `asset.type` is `type_` on
+            # the message. GAQL keeps the bare name, so accept both here.
+            current = getattr(parent, part + "_", _MISSING)
         if current is _MISSING:
             raise FieldPathError(
                 f"{path!r} is not a field on this row (stopped at {part!r})."

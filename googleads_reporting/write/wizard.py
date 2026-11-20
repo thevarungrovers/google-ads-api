@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..naming import Identity, NameRefused, cli_identity, stamp_for_cli
 from .client import MutationError
 from .spec import (
     CREATABLE_CHANNELS,
@@ -162,11 +163,33 @@ def _ask_images(label: str, *, required: bool) -> list[Path]:
         paths.append(path)
 
 
-def ask_for_campaign() -> CampaignSpec:
-    """Prompt for everything a new campaign needs."""
+def _ask_name(prompt: str, identity: Identity, entity_type: str) -> str:
+    """A name, stamped with the CLI prefix and echoed as it will be sent."""
+    hint = f" (the {identity.prefix} prefix is added)" if identity.prefix else ""
+    while True:
+        try:
+            stamped = stamp_for_cli(identity, _ask(prompt + hint), entity_type=entity_type)
+        except NameRefused as exc:
+            print(f"  {exc}")
+            continue
+        if stamped.final != stamped.requested:
+            print(f"  -> will be named {stamped.final!r}")
+        return stamped.final
+
+
+def ask_for_campaign(identity: Identity | None = None) -> CampaignSpec:
+    """Prompt for everything a new campaign needs.
+
+    Names are stamped ``<OWNER>-cli-<base>`` when the owner initials are set
+    in .env (the plain base when they are not), and each final name is shown
+    as soon as it is typed.
+    """
+    identity = cli_identity() if identity is None else identity
     print("\nNew campaign\n" + "-" * 60)
+    if identity.prefix:
+        print(f"  Names created here start with {identity.prefix} (from .env).")
     channel = _ask_choice("Channel", CREATABLE_CHANNELS)
-    name = _ask("Campaign name")
+    name = _ask_name("Campaign name", identity, "campaign")
     budget = _ask_float(
         "Daily budget (account currency, not micros)", minimum=0.0
     )
@@ -180,7 +203,7 @@ def ask_for_campaign() -> CampaignSpec:
     )
 
     print("\nAd group\n" + "-" * 60)
-    group_name = _ask("Ad group name")
+    group_name = _ask_name("Ad group name", identity, "ad_group")
     bid = _ask_float("Max CPC bid", default=0.50)
 
     keywords: list[str] = []

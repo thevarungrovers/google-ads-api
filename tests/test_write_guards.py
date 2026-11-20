@@ -247,3 +247,41 @@ def test_the_cli_money_flags_document_their_units():
     ):
         with pytest.raises(SystemExit):
             module.build_parser().parse_args(args)
+
+
+def test_the_mutate_allowlist_is_exactly_what_was_chosen():
+    """Widening it is the deliberate act that enlarges the blast radius.
+
+    Pinned as a whole set so an addition shows up in review as an edit here,
+    with the reason next to it in client.py.
+    """
+    assert ALLOWED_MUTATE_SERVICES == {
+        "CampaignBudgetService", "CampaignService", "AdGroupService",
+        "AdGroupAdService", "AdGroupCriterionService", "AssetService",
+        "GoogleAdsService",
+        # keywords and negatives
+        "CampaignCriterionService", "SharedCriterionService", "CampaignSharedSetService",
+        # ads and assets
+        "CampaignAssetService", "AdGroupAssetService",
+        # the low-risk edits
+        "LabelService", "CampaignLabelService", "AdGroupLabelService",
+        "AdGroupAdLabelService", "AdGroupCriterionLabelService", "RecommendationService",
+    }
+
+
+def test_google_one_click_apply_is_not_reachable():
+    """apply_recommendation would skip every bound; only dismiss is mapped."""
+    with pytest.raises(MutationError, match="Unsupported"):
+        _request_type_for("apply_recommendation")
+
+
+def test_an_atomic_request_cannot_smuggle_in_an_unlisted_service(client):
+    """GoogleAdsService.mutate reaches every service; each op is checked."""
+    from kindkit import RAW
+    from googleads_reporting.write.client import _service_of_mutate_operation
+
+    op = RAW.get_type("MutateOperation")
+    op.customer_label_operation.create.label = "customers/1/labels/2"
+    assert _service_of_mutate_operation(op) == "CustomerLabelService"
+    with pytest.raises(MutationError, match="CustomerLabelService"):
+        client.mutate_atomic([op], apply=False)

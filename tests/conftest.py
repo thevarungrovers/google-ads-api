@@ -16,7 +16,21 @@ from __future__ import annotations
 
 import pytest
 
-from googleads_reporting import logdb
+from googleads_reporting import logdb, naming
+
+# NO TEST MAY READ THE OPERATOR'S REAL NAMING IDENTITY either: it lives in the
+# repo's .env, and server.STATE is built at import. Module level, so it is in
+# place before any test module imports the server. A test that wants an
+# identity builds one (placeholders only: AB / max).
+naming.IDENTITY_FILES = ()
+
+
+@pytest.fixture(autouse=True)
+def _no_identity_in_the_process_env(monkeypatch):
+    """Importing the server loads the real .env into os.environ (config.load_env),
+    identity included, and process_env_mismatches would then report it."""
+    for name in ("GOOGLE_ADS_MCP_OWNER_INITIALS", "GOOGLE_ADS_MCP_AGENT_NAME"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

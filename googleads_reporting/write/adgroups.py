@@ -170,3 +170,27 @@ def plan_create(
         action="create", entity="ad group", label=name,
         service=SERVICE, method=METHOD, operations=[operation], changes=changes,
     )
+
+
+def plan_rename(
+    client: MutatingGoogleAdsClient,
+    *,
+    new_name: str,
+    ad_group_id: str,
+    customer_id: str | None = None,
+) -> PlannedChange:
+    """Rename an ad group. Names are unique within a campaign, not the account."""
+    if not new_name.strip():
+        raise MutationError("An ad group name cannot be blank.")
+    row = find(client, ad_group_id=ad_group_id, customer_id=customer_id)
+    if row.ad_group.name == new_name:
+        raise MutationError(f"Ad group is already named {new_name!r}.")
+    operation = client.get_type("AdGroupOperation")
+    operation.update.resource_name = row.ad_group.resource_name
+    operation.update.name = new_name
+    set_update_mask(client, operation)
+    return PlannedChange(
+        action="update", entity="ad group", label=f"id {row.ad_group.id}",
+        service=SERVICE, method=METHOD, operations=[operation],
+        changes=[FieldChange("name", row.ad_group.name, new_name)],
+    )

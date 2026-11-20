@@ -1,0 +1,95 @@
+"""Change kinds: every write the server can make, one class each.
+
+See :mod:`.base` for what a kind is and :mod:`.engine` for the sequence every
+kind goes through. To add one, subclass ``ChangeKind`` in a module here, list
+it in :func:`all_kinds`, pin its two tool names in tests/test_mcp_surface.py
+and install.py, and give it the tests the project CLAUDE.md lists.
+"""
+
+from __future__ import annotations
+
+from googleads_mcp.changes.base import ChangeKind
+
+
+def all_kinds() -> list[ChangeKind]:
+    """Every published kind, in the order the tools are registered."""
+    from googleads_mcp.changes.adgroups import AdGroupCpcBid, AdGroupStatus
+    from googleads_mcp.changes.ads import (
+        AdStatus,
+        AddCallouts,
+        AddSitelinks,
+        AddStructuredSnippets,
+        CreateResponsiveSearchAd,
+        ReplaceResponsiveSearchAd,
+    )
+    from googleads_mcp.changes.bidding import BiddingStrategy, SharedBudgetAmount
+    from googleads_mcp.changes.campaigns import CampaignDailyBudget, CampaignStatus
+    from googleads_mcp.changes.creation import (
+        CreateAdGroup,
+        CreateCampaign,
+        RenameAdGroup,
+        RenameCampaign,
+    )
+    from googleads_mcp.changes.low_risk import LowRiskChange
+    from googleads_mcp.changes.recommendations import ApplyRecommendation
+    from googleads_mcp.changes.targeting import (
+        AdSchedule,
+        AudienceTargeting,
+        CampaignLanguages,
+        CampaignLocations,
+        CampaignNetworks,
+        DeviceBidModifier,
+        LocationBidModifier,
+    )
+    from googleads_mcp.changes.keywords import (
+        AddKeywords,
+        AddNegativeKeywords,
+        AddToSharedNegativeList,
+        KeywordCpcBid,
+        KeywordStatus,
+        LinkSharedNegativeList,
+    )
+
+    return [
+        CampaignStatus(),
+        CampaignDailyBudget(),
+        AdGroupStatus(),
+        AdGroupCpcBid(),
+        # keywords and search terms
+        AddKeywords(),
+        KeywordStatus(),
+        KeywordCpcBid(),
+        AddNegativeKeywords(),
+        AddToSharedNegativeList(),
+        LinkSharedNegativeList(),
+        # bidding and budgets
+        BiddingStrategy(),
+        SharedBudgetAmount(),
+        # targeting
+        CampaignLocations(),
+        CampaignLanguages(),
+        AdSchedule(),
+        DeviceBidModifier(),
+        LocationBidModifier(),
+        AudienceTargeting(),
+        CampaignNetworks(),
+        # ads and assets
+        CreateResponsiveSearchAd(),
+        AdStatus(),
+        ReplaceResponsiveSearchAd(),
+        AddSitelinks(),
+        AddCallouts(),
+        AddStructuredSnippets(),
+        # creation and naming
+        CreateCampaign(),
+        CreateAdGroup(),
+        RenameCampaign(),
+        RenameAdGroup(),
+        # Google's recommendations, routed through the kinds above
+        ApplyRecommendation(),
+        # the one general tool, on a closed allowlist
+        LowRiskChange(),
+    ]
+
+
+__all__ = ["ChangeKind", "all_kinds"]

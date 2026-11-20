@@ -43,6 +43,7 @@ LEGACY_LEDGER_PATH = LEGACY_LEDGER_DIR / "mcp-changes.jsonl"
 new_entry_id = logdb.new_entry_id
 entries = logdb.change_entries
 find_entry = logdb.find_change
+batch_entries = logdb.batch_changes
 reverted_entry_ids = logdb.reverted_entry_ids
 
 
@@ -58,9 +59,15 @@ def write_intent(
     before: str,
     after: str,
     projected_delta: str,
+    batch_id: str | None = None,
+    detail: Any = None,
+    weight: int = 1,
 ) -> None:
     """Record what we are ABOUT to do. Must be called before the mutation."""
     logdb.insert_change(
+        batch_id=batch_id,
+        detail=detail,
+        weight=weight,
         entry_id=entry_id,
         tool=tool,
         customer_id=customer_id,
@@ -81,6 +88,7 @@ def write_outcome(
     resource_name: str | None = None,
     error: str | None = None,
     reverts: str | None = None,
+    created_resources: list[str] | None = None,
 ) -> None:
     """Record how it went, and which earlier entry this one reverses."""
     logdb.complete_change(
@@ -89,7 +97,62 @@ def write_outcome(
         resource_name=resource_name,
         error=error,
         reverts=reverts,
+        created_resources=created_resources,
     )
+
+
+# --- attribution ------------------------------------------------------------
+
+#: Ledger entity types for the naming entity types.
+_LEDGER_TYPE = {"campaign": "campaign", "ad_group": "ad group", "label": "label"}
+_COLLECTION = {"campaign": "campaigns", "ad_group": "adGroups", "label": "labels"}
+
+
+def created_index() -> dict[str, set]:
+    """Everything this checkout's ledger shows this server created, in one pass.
+
+    ``{"campaign": {ids}, "ad_group": {ids}, "label": {ids},
+    "pre_feature": {(type, id)}}``. Evidence is always an ID: the row's own
+    resource name, or -- for the ad groups built inside a create_campaign
+    request, which get no row of their own -- the ``created_resources`` the
+    row recorded from Google's response. Never a name: a person can add an
+    ad group with the same name to our campaign later, and it is not ours.
+    ``pre_feature`` marks creations recorded before the ledger carried a
+    naming identity. An applied rename recorded WITH a naming identity counts
+    too: renames with one are only ever allowed on our own entities.
+    """
+    index: dict[str, set] = {"campaign": set(), "ad_group": set(), "label": set(),
+                             "pre_feature": set()}
+    by_type = {v: k for k, v in _LEDGER_TYPE.items()}
+    for entry in entries():
+        if not entry.get("applied"):
+            continue
+        detail = entry.get("detail") or {}
+        kind = by_type.get(entry.get("entity_type") or "")
+        resource = entry.get("resource_name") or ""
+        # Label rows say "create" (the low-risk kind's field), every other kind "created".
+        if entry.get("field") in ("created", "create") and resource:
+            for made in [resource, *(detail.get("created_resources") or [])]:
+                collection, _, entity_id = str(made).rpartition("/")
+                for name, plural in _COLLECTION.items():
+                    if collection.endswith("/" + plural):
+                        index[name].add(entity_id)
+                        if "identity" not in detail:
+                            # Created before names carried a prefix.
+                            index["pre_feature"].add((name, entity_id))
+        elif entry.get("field") == "name" and kind and "identity" in detail:
+            index[kind].add(str(entry.get("entity_id")))
+    return index
+
+
+def created_by_us(entity_type: str, entity_id: str, *,
+                  index: dict[str, set] | None = None) -> bool:
+    """Whether this checkout's ledger shows this server created the entity,
+    BY ID. ``entity_type`` is a naming type: "campaign", "ad_group" or
+    "label". See :func:`created_index` for what counts as evidence.
+    """
+    index = index if index is not None else created_index()
+    return str(entity_id) in index.get(entity_type, set())
 
 
 # --- migration off the JSONL ----------------------------------------------

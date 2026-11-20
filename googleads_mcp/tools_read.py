@@ -7,37 +7,26 @@ write unreachable regardless of what is asked for here.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from googleads_mcp.errors import refusals_reach_the_caller
+from googleads_mcp.readkit import fetch
 from googleads_reporting.client import ReadOnlyGoogleAdsClient
 from googleads_reporting.export import summarise, to_dataframe
-from googleads_reporting.query import Query, between, contains, during, last_n_days
+from googleads_reporting.query import (
+    Query,
+    between,
+    contains,
+    during,
+    last_n_days,
+    quote_literal,
+    starts_with,
+)
 from googleads_reporting.reports import REGISTRY, get_report, report_names
-
-def refusals_reach_the_caller(fn):
-    """Re-raise a deliberate refusal as ToolError so its message survives.
-
-    The MCP runtime carries a ToolError's text through to the caller but
-    replaces every other exception with a bare "Error executing tool <name>".
-    An unknown report name should say which names exist, not nothing.
-    """
-    import functools
-
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except ToolError:
-            raise
-        except (ValueError, LookupError) as exc:
-            raise ToolError(str(exc)) from exc
-
-    return wrapper
-
 
 # ALL FOUR HINTS, ALWAYS, ON EVERY TOOL. A hint left unset is published as
 # absent, and a client that cannot see one falls back on the spec's default --
@@ -80,6 +69,98 @@ def _money(value: Any) -> str:
     return f"{Decimal(str(value or 0)):.2f}"
 
 
+# -- filtering by who named it ---------------------------------------------
+#
+# The same four arguments on every find/list tool that returns named things.
+# Each value is checked against the naming patterns before any GAQL is built,
+# a server-side LIKE narrows the scan where the prefix allows it, and the
+# exact match runs locally (LIKE is case-insensitive and treats _ as a
+# wildcard, so it only narrows).
+
+NameOrigin = Annotated[
+    Literal["any", "agent", "cli", "manual"],
+    Field(description='By name prefix: "agent" (OWNER-agent-...), "cli" (OWNER-cli-...), '
+          '"manual" (no prefix), or "any"'),
+]
+AgentName = Annotated[str | None, Field(description="Only names with this agent part")]
+Owner = Annotated[str | None, Field(description="Only names starting with these initials")]
+Mine = Annotated[bool, Field(description="Only names with THIS server's prefix (from .env)")]
+
+#: How many rows a filtered scan reads before filtering locally.
+NAMING_SCAN = 1000
+
+
+def identity_of(state):
+    from googleads_reporting.naming import Identity
+
+    return getattr(state, "identity", None) or Identity()
+
+
+def naming_filter(state, field: str, *, origin: str, agent_name: str | None,
+                  owner: str | None, mine: bool):
+    """(GAQL conditions, exact local predicate on a name, whether any filter is on)."""
+    from googleads_reporting import naming
+
+    naming.check_filter(owner, agent_name)
+    identity = identity_of(state)
+    if mine and not identity.prefix:
+        raise ValueError(
+            "mine=True needs a naming identity, and none is configured: set "
+            f"{naming.OWNER_KEY} and/or {naming.AGENT_KEY} in the repo's .env."
+        )
+    where = []
+    if mine:
+        where.append(starts_with(field, identity.prefix))
+    elif owner:
+        where.append(starts_with(field, f"{owner}-" + (f"{agent_name}-" if agent_name else "")))
+    elif origin == "cli":
+        where.append(contains(field, f"-{naming.CLI_AGENT}-"))
+
+    def keep(name: str) -> bool:
+        return naming.matches(name, origin=origin, owner=owner, agent_name=agent_name,
+                              mine=mine, identity=identity)
+
+    return where, keep, bool(mine or owner or agent_name or origin != "any")
+
+
+def naming_fields(state, name: str, created: bool) -> dict[str, Any]:
+    """origin / owner / agent / base from the name, and ledger_created from the ledger."""
+    from googleads_reporting import naming
+
+    return {**naming.attribute(name, identity_of(state)), "ledger_created": created}
+
+
+def money_rows(rows: list[dict[str, Any]], select: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Report rows with every money column as a 2dp decimal string.
+
+    The frame hands money back as floats (1.0, 0.1 + 0.2 noise); everything an
+    agent or human sees is a decimal string in major units, like the totals.
+    """
+    from googleads_reporting.fields import is_micros_field, money_column_name
+
+    columns = [money_column_name(p) for p in select if is_micros_field(p)]
+    for row in rows:
+        for column in columns:
+            value = row.get(column)
+            row[column] = None if value is None or value != value else f"{Decimal(str(value)):.2f}"
+    return rows
+
+
+def capped(items: list[dict[str, Any]], limit: int, what: str) -> list[dict[str, Any]]:
+    """``items`` cut to ``limit``, ending with a marker when more exist.
+
+    Each list tool asks Google for one row more than its limit: if that row
+    came back, the list was cut, and the last element says so -- rather than
+    the agent taking a page of 50 for the whole account.
+    """
+    if len(items) <= limit:
+        return items
+    return [*items[:limit], {
+        "truncated": True, "shown": limit,
+        "note": f"more {what} exist than the {limit} shown: raise limit or narrow the filter",
+    }]
+
+
 def register(mcp, state) -> None:
     """Attach every read tool to ``mcp``."""
 
@@ -109,31 +190,48 @@ def register(mcp, state) -> None:
             str | None,
             Field(description="Case-insensitive substring of the campaign name"),
         ] = None,
+        # A Literal, not a str: the value goes into GAQL, and a free string
+        # here was interpolated verbatim. The schema now refuses anything else
+        # before the tool body runs.
         status: Annotated[
-            str | None, Field(description="ENABLED, PAUSED or REMOVED")
+            Literal["ENABLED", "PAUSED", "REMOVED"] | None,
+            Field(description="ENABLED, PAUSED or REMOVED"),
         ] = None,
         limit: Annotated[int, Field(description="Max rows", ge=1, le=200)] = 50,
+        origin: NameOrigin = "any",
+        agent_name: AgentName = None,
+        owner: Owner = None,
+        mine: Mine = False,
     ) -> list[dict[str, Any]]:
         """Campaigns with their ids, status, channel and daily budget.
 
         Start here. Campaign ids are not visible in the Google Ads UI, so every
-        write tool needs one from this.
+        write tool needs one from this. Each row also says who named it
+        (origin / owner / agent / base, from the OWNER-agent- prefix) and
+        whether this server's ledger shows it created it; filter on those
+        with origin, agent_name, owner or mine.
         """
-        where = []
+        from googleads_mcp import ledger
+
+        naming_where, keep, filtering = naming_filter(
+            state, "campaign.name", origin=origin, agent_name=agent_name, owner=owner,
+            mine=mine)
+        where = list(naming_where)
         if name_contains:
             where.append(contains("campaign.name", name_contains))
         if status:
-            where.append(f"campaign.status = '{status.upper()}'")
+            where.append(f"campaign.status = {quote_literal(status)}")
         rows = client.rows(
             Query(
                 select=_CAMPAIGN_FIELDS,
                 from_resource="campaign",
                 where=tuple(where),
                 order_by=("campaign.name",),
-                limit=limit,
+                limit=NAMING_SCAN if filtering else limit + 1,
             )
         )
-        return [
+        created = ledger.created_index()["campaign"]
+        return capped([
             {
                 "campaign_id": str(r["campaign.id"]),
                 "name": r["campaign.name"],
@@ -142,9 +240,10 @@ def register(mcp, state) -> None:
                 "budget_id": str(r["campaign_budget.id"]),
                 "daily_budget": _money(r["campaign_budget.amount_micros"]),
                 "currency": r["customer.currency_code"],
+                **naming_fields(state, r["campaign.name"], str(r["campaign.id"]) in created),
             }
-            for r in rows
-        ]
+            for r in rows if keep(r["campaign.name"])
+        ], limit, "campaigns")
 
     @mcp.tool(title="Find ad groups by name", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -152,14 +251,24 @@ def register(mcp, state) -> None:
         name_contains: Annotated[str | None, Field(description="Substring")] = None,
         campaign_id: Annotated[str | None, Field(description="Restrict to one campaign")] = None,
         limit: Annotated[int, Field(ge=1, le=200)] = 50,
+        origin: NameOrigin = "any",
+        agent_name: AgentName = None,
+        owner: Owner = None,
+        mine: Mine = False,
     ) -> list[dict[str, Any]]:
         """Ad groups with their ids, status, bid and parent campaign.
 
         Ad group names are unique only WITHIN a campaign, so a bare name match
         across the account is routinely ambiguous -- the campaign is included
-        so duplicates can be told apart.
+        so duplicates can be told apart. Rows say who named each ad group and
+        whether this server created it, and filter like find_campaigns.
         """
-        where = []
+        from googleads_mcp import ledger
+
+        naming_where, keep, filtering = naming_filter(
+            state, "ad_group.name", origin=origin, agent_name=agent_name, owner=owner,
+            mine=mine)
+        where = list(naming_where)
         if name_contains:
             where.append(contains("ad_group.name", name_contains))
         if campaign_id:
@@ -174,10 +283,11 @@ def register(mcp, state) -> None:
                 from_resource="ad_group",
                 where=tuple(where),
                 order_by=("ad_group.name",),
-                limit=limit,
+                limit=NAMING_SCAN if filtering else limit + 1,
             )
         )
-        return [
+        index = ledger.created_index()
+        return capped([
             {
                 "ad_group_id": str(r["ad_group.id"]),
                 "name": r["ad_group.name"],
@@ -186,9 +296,11 @@ def register(mcp, state) -> None:
                 "campaign_id": str(r["campaign.id"]),
                 "campaign_name": r["campaign.name"],
                 "currency": r["customer.currency_code"],
+                **naming_fields(state, r["ad_group.name"], ledger.created_by_us(
+                    "ad_group", str(r["ad_group.id"]), index=index)),
             }
-            for r in rows
-        ]
+            for r in rows if keep(r["ad_group.name"])
+        ], limit, "ad groups")
 
     @mcp.tool(title="Run a performance report", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -203,13 +315,28 @@ def register(mcp, state) -> None:
         start_date: Annotated[str | None, Field(description="YYYY-MM-DD")] = None,
         end_date: Annotated[str | None, Field(description="YYYY-MM-DD")] = None,
         campaign_id: Annotated[str | None, Field(description="Restrict to one campaign")] = None,
+        ad_group_id: Annotated[
+            str | None, Field(description="Restrict to one ad group (reports that have one)")
+        ] = None,
+        segment_by_date: Annotated[
+            bool,
+            Field(description="One row per entity PER DAY. Default: one row per "
+                  "entity over the whole window"),
+        ] = False,
         limit: Annotated[int, Field(ge=1, le=500)] = 100,
     ) -> dict[str, Any]:
-        """Campaign, keyword or account performance.
+        """Performance for one report: campaigns, ad groups, keywords, search
+        terms, ads, locations, devices, hours, audiences, assets, conversions.
 
-        Today is excluded from `days` on purpose: today's metrics are partial
-        all day and drag every average down. Cost is already converted out of
-        micros, so `metrics.cost` is in the account's currency.
+        One row per entity over the window by default; segment_by_date=True
+        for daily rows. Today is excluded from `days` on purpose: today's
+        metrics are partial all day and drag every average down. Cost is
+        already converted out of micros, so `metrics.cost` is in the account's
+        currency.
+
+        Never silently cut: `truncated` says whether more rows matched than
+        `limit` returned, `total_rows_available` how many, and `totals` are
+        over ALL matching rows, not just the ones returned.
         """
         definition = get_report(report)
         condition = None
@@ -218,18 +345,29 @@ def register(mcp, state) -> None:
                 condition = between(start_date, end_date)
             elif days:
                 condition = last_n_days(days)
-        extra = (f"campaign.id = {int(campaign_id)}",) if campaign_id else ()
+        extra = []
+        if campaign_id:
+            extra.append(f"campaign.id = {int(campaign_id)}")
+        if ad_group_id:
+            if not any(p.startswith("ad_group.") for p in definition.select):
+                raise ValueError(f"Report {report!r} has no ad group to filter on.")
+            extra.append(f"ad_group.id = {int(ad_group_id)}")
         query = definition.build(
-            date_condition=condition, extra_where=extra, limit=limit
+            date_condition=condition,
+            extra_where=tuple(extra),
+            segment_by_date=segment_by_date,
         )
-        rows = client.rows(query)
-        frame = to_dataframe(rows, definition.select)
+        fetched = fetch(client, query, limit)
+        frame = to_dataframe(fetched["rows"], query.select)
+        everything = to_dataframe(fetched["all_rows"], query.select)
         return {
             "report": report,
-            "gaql": query.to_gaql(),
+            "gaql": fetched["gaql"],
             "row_count": len(frame),
-            "totals": {k: str(v) for k, v in summarise(frame).items()},
-            "rows": frame.to_dict(orient="records"),
+            "total_rows_available": fetched["total_rows_available"],
+            "truncated": fetched["truncated"],
+            "totals": {k: str(v) for k, v in summarise(everything).items()},
+            "rows": money_rows(frame.to_dict(orient="records"), tuple(query.select)),
         }
 
     @mcp.tool(title="Show the write guardrails and session budget", annotations=LOCAL_ONLY)
@@ -239,13 +377,20 @@ def register(mcp, state) -> None:
 
         Call this before proposing a change, so you propose something that can
         actually be applied rather than something that will be refused.
+        `identity` is the naming prefix put on what you create (from the
+        repo's .env; which parts are set, and any problem with them).
         """
-        from googleads_mcp.guardrails import read_only_mode, writes_disabled
+        from googleads_mcp.guardrails import DailyUsage, read_only_mode, writes_disabled
+
+        from googleads_reporting.naming import Identity
 
         read_only = read_only_mode()
+        identity = getattr(state, "identity", None) or Identity()
         return {
+            "identity": identity.describe(),
             "limits": state.limits.describe(),
             "session": state.counters.snapshot(),
+            "daily": DailyUsage(state.limits).snapshot(),
             "writes_disabled": writes_disabled(),
             "read_only_server": read_only,
             "pending_previews": state.previews.pending_count,
@@ -256,7 +401,13 @@ def register(mcp, state) -> None:
                 "what you would change, and let them make it from a writable "
                 "client or the Google Ads UI."
                 if read_only
-                else "Session counters reset only when the server restarts."
+                else "Two budgets apply to every apply_* and revert_change. "
+                "`session` is this server process and resets when it restarts. "
+                "`daily` is the local calendar day across EVERY process, counted "
+                "from the change ledger, and resets at local midnight -- it is "
+                "the one that bounds an agent in continuous use. A batch counts "
+                "as one apply; a creation counts as 3; a revert counts as 1 with "
+                "zero projected spend."
             ),
         }
 

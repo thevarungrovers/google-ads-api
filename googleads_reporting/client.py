@@ -28,7 +28,7 @@ package.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from typing import Any
 
 from google.ads.googleads.client import GoogleAdsClient
@@ -204,18 +204,30 @@ class ReadOnlyGoogleAdsClient:
                 slot["row_count"] = rows
 
     def rows(
-        self, query: Query | str, *, customer_id: str | None = None
+        self, query: Query | str, *, customer_id: str | None = None,
+        read: Iterable[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Run ``query`` and return flattened dicts, columns in SELECT order.
 
-        Money is already out of micros; enums are already names.
+        Money is already out of micros; enums are already names. Retried on a
+        transient failure (see retry.py) -- safe because the whole result is
+        collected before returning, so a retry never hands back half a stream
+        twice.
+
+        ``read`` names the columns to return when they are not the SELECT list:
+        some resources only let a whole message be selected (``recommendation.
+        impact``), and its fields are read from the row that comes back.
         """
+        from .retry import retry_read
+
         gaql = self._to_gaql(query)
-        paths = parse_select(gaql)
-        return [
-            row_to_dict(row, paths)
-            for row in self.search_stream(gaql, customer_id=customer_id)
-        ]
+        paths = list(read) if read is not None else parse_select(gaql)
+        return retry_read(
+            lambda: [
+                row_to_dict(row, paths)
+                for row in self.search_stream(gaql, customer_id=customer_id)
+            ]
+        )
 
     # -- internals ---------------------------------------------------------
 

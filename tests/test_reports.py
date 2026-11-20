@@ -30,7 +30,11 @@ def resolve_path(path: str) -> str:
     for part in path.split("."):
         if descriptor is None:
             return f"{path!r}: {part!r} is a field of a scalar, not a message"
-        field = descriptor.fields_by_name.get(part)
+        # proto-plus appends "_" to a name that collides with a builtin
+        # (asset.type is `type_` on the message); GAQL keeps the bare name.
+        field = descriptor.fields_by_name.get(part) or descriptor.fields_by_name.get(
+            part + "_"
+        )
         if field is None:
             return f"{path!r}: no field {part!r}"
         descriptor = (
@@ -84,13 +88,17 @@ def test_order_by_fields_are_also_selected(report: Report):
 
 
 def test_registry_is_populated_and_keyed_by_name():
-    assert report_names() == ["accounts", "campaigns", "keywords"]
+    assert report_names() == [
+        "accounts", "ad_groups", "ads", "assets", "audiences", "campaigns",
+        "conversions_by_action", "devices", "hour_of_day", "keywords",
+        "locations", "search_terms",
+    ]
     for name, report in REGISTRY.items():
         assert report.name == name
 
 
 def test_get_report_error_lists_what_is_available():
-    with pytest.raises(KeyError, match="accounts, campaigns, keywords"):
+    with pytest.raises(KeyError, match="accounts, ad_groups, ads"):
         get_report("campaign")  # singular -- an easy mistake
 
 
@@ -190,3 +198,23 @@ def test_a_report_selecting_an_unruled_money_field_fails_at_definition():
 def test_a_report_selecting_nothing_fails_at_definition():
     with pytest.raises(QueryError, match="selects no fields"):
         Report(name="empty", description="x", resource="campaign", select=())
+
+
+@pytest.mark.parametrize("report", ALL_REPORTS)
+def test_segment_by_date_adds_or_drops_the_date(report: Report):
+    if not report.supports_date_range:
+        return
+    daily = report.build(segment_by_date=True)
+    assert daily.select[0] == "segments.date"
+    assert daily.order_by[0] == "segments.date"
+    whole = report.build(segment_by_date=False)
+    assert "segments.date" not in whole.select
+    assert all(not o.startswith("segments.date") for o in whole.order_by)
+    # The window applies to both: GAQL filters on a date it does not select.
+    assert "segments.date DURING" in whole.to_gaql()
+
+
+def test_none_keeps_the_report_as_declared():
+    """The CLI never passes it, and its output must not change."""
+    report = REGISTRY["campaigns"]
+    assert report.build().select == report.select
