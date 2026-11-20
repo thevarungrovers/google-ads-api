@@ -25,7 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Discriminator, Field, Tag
 
 from googleads_mcp.changes.base import (
     APPLY_REVERSIBLE,
@@ -74,13 +74,25 @@ class DisplayAd(BaseModel):
     square_logo_images: list[str] = []
 
 
+def _ad_type(value: Any) -> str:
+    """The ad's `type`, defaulting to responsive_search as SearchAd declares.
+
+    A plain discriminator demands the tag, so an ad that left `type` out --
+    as the schema's default invites -- was refused with "Unable to extract
+    tag" (live, from a create_campaign preview).
+    """
+    if isinstance(value, dict):
+        return value.get("type") or "responsive_search"
+    return getattr(value, "type", "responsive_search")
+
+
 class NewAdGroup(BaseModel):
     name: str
     cpc_bid: str | None = Field(default=None, description='Decimal string, e.g. "0.80"')
     keywords: list[str] = Field(default=[], description="PHRASE match, Search only")
-    ads: list[Annotated[Union[SearchAd, DisplayAd], Field(discriminator="type")]] = Field(
-        min_length=1
-    )
+    ads: list[Annotated[Union[Annotated[SearchAd, Tag("responsive_search")],
+                              Annotated[DisplayAd, Tag("responsive_display")]],
+                        Discriminator(_ad_type)]] = Field(min_length=1)
 
 
 def _spec_ad(ad: dict[str, Any]):

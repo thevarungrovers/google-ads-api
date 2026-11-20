@@ -339,3 +339,18 @@ def test_creating_a_campaign_records_every_entity_it_created_by_id():
     made = ledger.find_entry(result.entry_id)["detail"]["created_resources"]
     group_ids = {n.rsplit("/", 1)[1] for n in made if "/adGroups/" in n}
     assert len(group_ids) == 1 and group_ids <= index["ad_group"]
+
+
+def test_an_ad_without_a_type_is_a_responsive_search_ad():
+    """Live: the schema said type defaults to responsive_search, yet leaving it
+    out was refused ("Unable to extract tag using discriminator 'type'")."""
+    from googleads_mcp.changes.creation import DisplayAd, NewAdGroup, SearchAd
+
+    untyped = {k: v for k, v in AD.items() if k != "type"}
+    group = NewAdGroup.model_validate({"name": "General", "ads": [untyped]})
+    assert isinstance(group.ads[0], SearchAd)
+    display = NewAdGroup.model_validate({"name": "G", "ads": [{
+        "type": "responsive_display", "headlines": ["h"], "long_headline": "lh",
+        "descriptions": ["d"], "business_name": "Example Co", "final_url": "https://example.com",
+        "marketing_images": ["a.png"], "square_marketing_images": ["b.png"]}]})
+    assert isinstance(display.ads[0], DisplayAd)
