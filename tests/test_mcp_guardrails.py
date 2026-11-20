@@ -179,8 +179,11 @@ def test_a_token_is_single_use(store):
 
 def test_a_token_is_not_valid_for_another_tool(store):
     token = _mint(store, tool="apply_campaign_status")
-    with pytest.raises(PreviewExpired, match="not interchangeable"):
+    with pytest.raises(PreviewExpired, match="now spent: take a fresh preview for "
+                       "preview_campaign_status"):
         store.take(token, "apply_campaign_daily_budget")
+    with pytest.raises(PreviewExpired, match="already used"):
+        store.take(token, "apply_campaign_status")
 
 
 def test_a_blocked_preview_cannot_be_applied(store):
