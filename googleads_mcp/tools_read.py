@@ -130,6 +130,22 @@ def naming_fields(state, name: str, created: bool) -> dict[str, Any]:
     return {**naming.attribute(name, identity_of(state)), "ledger_created": created}
 
 
+def money_rows(rows: list[dict[str, Any]], select: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Report rows with every money column as a 2dp decimal string.
+
+    The frame hands money back as floats (1.0, 0.1 + 0.2 noise); everything an
+    agent or human sees is a decimal string in major units, like the totals.
+    """
+    from googleads_reporting.fields import is_micros_field, money_column_name
+
+    columns = [money_column_name(p) for p in select if is_micros_field(p)]
+    for row in rows:
+        for column in columns:
+            value = row.get(column)
+            row[column] = None if value is None or value != value else f"{Decimal(str(value)):.2f}"
+    return rows
+
+
 def capped(items: list[dict[str, Any]], limit: int, what: str) -> list[dict[str, Any]]:
     """``items`` cut to ``limit``, ending with a marker when more exist.
 
@@ -351,7 +367,7 @@ def register(mcp, state) -> None:
             "total_rows_available": fetched["total_rows_available"],
             "truncated": fetched["truncated"],
             "totals": {k: str(v) for k, v in summarise(everything).items()},
-            "rows": frame.to_dict(orient="records"),
+            "rows": money_rows(frame.to_dict(orient="records"), tuple(query.select)),
         }
 
     @mcp.tool(title="Show the write guardrails and session budget", annotations=LOCAL_ONLY)
