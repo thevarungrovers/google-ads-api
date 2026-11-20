@@ -85,6 +85,9 @@ def test_recommendations_select_whole_messages_only():
     assert set(messages) <= set(tools_audit.RECOMMENDATION_SELECT)
     assert not [f for f in tools_audit.RECOMMENDATION_SELECT
                 if any(f.startswith(m + ".") for m in messages)]
+    from googleads_mcp.changes import recommendations
+    assert not [f for f in recommendations._FIELDS
+                if any(f.startswith(m + ".") for m in messages)], "preview_recommendation too"
     # Everything read is inside something selected.
     assert all(any(f == s or f.startswith(s + ".") for s in tools_audit.RECOMMENDATION_SELECT)
                for f in tools_audit.RECOMMENDATION_FIELDS)

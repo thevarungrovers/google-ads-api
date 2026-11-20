@@ -152,3 +152,29 @@ def test_an_unexpected_exception_still_reaches_the_agent():
     """A bare 'Error executing tool' is what this whole module exists to prevent."""
     with pytest.raises(ToolError, match="^UNEXPECTED: TypeError: boom"):
         _raising(TypeError("boom"))()
+
+
+def test_a_failed_read_on_the_write_client_reaches_the_agent_readably(monkeypatch):
+    """Live: preview_recommendation's query failed through the WRITE client's
+    query(), and the agent got the library's gRPC dump instead of Google's
+    error code and message."""
+    from google.ads.googleads.errors import GoogleAdsException
+
+    from googleads_reporting.write.client import MutatingGoogleAdsClient
+    from kindkit import SETTINGS
+
+    monkeypatch.setattr("googleads_reporting.retry.time.sleep", lambda _s: None, raising=False)
+
+    class Service:
+        def search_stream(self, **_kw):
+            raise GoogleAdsException(None, None, failure(
+                "query_error", "QueryErrorEnum", "UNRECOGNIZED_FIELD"), "req-9")
+
+    client = MutatingGoogleAdsClient(object(), SETTINGS)
+    monkeypatch.setattr(client, "service", lambda _name: Service())
+    with pytest.raises(GoogleAdsReportingError) as caught:
+        client.query("SELECT campaign.id FROM campaign")
+    text = str(caught.value)
+    assert "query_error" in text and "UNRECOGNIZED_FIELD" in text and "request_id: req-9" in text
+    assert "_SingleThreadedRendezvous" not in text
+    assert errors.classify(caught.value) == errors.INVALID_QUERY

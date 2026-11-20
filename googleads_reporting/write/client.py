@@ -183,7 +183,17 @@ class MutatingGoogleAdsClient:
                 slot["row_count"] = len(rows)
             return rows
 
-        return retry_read(run)
+        from google.ads.googleads.errors import GoogleAdsException
+
+        from ..client import ReadOnlyGoogleAdsClient
+
+        try:
+            return retry_read(run)
+        except GoogleAdsException as exc:
+            # Formatted after the retries (they classify the original): the
+            # library's repr buries Google's error code and message under a
+            # gRPC dump, which reached the agent verbatim from a preview.
+            raise ReadOnlyGoogleAdsClient._describe_failure(exc, target, gaql) from exc
 
     # -- the one write path ------------------------------------------------
 

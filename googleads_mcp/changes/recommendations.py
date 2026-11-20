@@ -42,9 +42,10 @@ _DELEGATES: dict[str, ChangeKind] = {
 _FIELDS = (
     "recommendation.resource_name", "recommendation.type", "recommendation.campaign",
     "recommendation.ad_group", "recommendation.dismissed",
-    "recommendation.campaign_budget_recommendation.recommended_budget_amount_micros",
-    "recommendation.keyword_recommendation.keyword.text",
-    "recommendation.keyword_recommendation.keyword.match_type",
+    # Whole messages: v25 refuses their fields as "Unrecognized" (see
+    # tools_audit.RECOMMENDATION_SELECT); the values are read off the row.
+    "recommendation.campaign_budget_recommendation",
+    "recommendation.keyword_recommendation",
 )
 
 
