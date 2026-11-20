@@ -26,6 +26,14 @@ naming.IDENTITY_FILES = ()
 
 
 @pytest.fixture(autouse=True)
+def _no_identity_in_the_process_env(monkeypatch):
+    """Importing the server loads the real .env into os.environ (config.load_env),
+    identity included, and process_env_mismatches would then report it."""
+    for name in ("GOOGLE_ADS_MCP_OWNER_INITIALS", "GOOGLE_ADS_MCP_AGENT_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_log_database(tmp_path):
     """Point logdb at a per-test database and put the real one back after."""
     original_dir, original_path = logdb.LOG_DIR, logdb.DB_PATH
