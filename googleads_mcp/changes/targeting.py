@@ -213,6 +213,10 @@ class CampaignLocations(_AddCampaignCriteria):
                 "the campaign has no location targets today, i.e. it serves EVERYWHERE; "
                 "adding one restricts it to the listed locations"
             )
+        elif current_targets:
+            # `before` is "(none)" for the NEW criteria; say what is there today.
+            warnings.append(f"the campaign targets {len(current_targets)} location(s) today "
+                            "(get_campaign lists them); this adds to them")
         return self._propose(ctx, campaign_id, specs, warnings=warnings,
                              widens=bool(add) and bool(current_targets),
                              narrows=bool(exclude) or (bool(add) and not current_targets))
@@ -227,6 +231,10 @@ class CampaignLocations(_AddCampaignCriteria):
             geo = r.campaign_criterion.location.geo_target_constant.rsplit("/", 1)[-1]
             out.add(f"{'-' if r.campaign_criterion.negative else '+'}{geo}")
         return out
+
+
+#: Channels Google refuses a campaign language criterion on.
+NO_LANGUAGE_TARGETS = frozenset({"SHOPPING", "PERFORMANCE_MAX"})
 
 
 class CampaignLanguages(_AddCampaignCriteria):
@@ -247,9 +255,17 @@ class CampaignLanguages(_AddCampaignCriteria):
         A campaign with NO language targets serves in all languages; its first
         language target narrows it to that language."""
         specs = [{"kind": "language", "language_id": str(int(i))} for i in language_ids]
-        has_any = bool(_criteria(ctx, campaign_id, "LANGUAGE",
-                                 ("campaign_criterion.language.language_constant",)))
-        warnings = [] if has_any else [
+        channel = _campaign(ctx, campaign_id).campaign.advertising_channel_type.name
+        if channel in NO_LANGUAGE_TARGETS:
+            # Live: Google refuses it as "not allowed for the given context".
+            raise ValueError(f"A {channel} campaign takes no language targets: the products' "
+                             "feed language decides who sees them.")
+        today = sorted(self._existing_keys(ctx, campaign_id))
+        has_any = bool(today)
+        # `before` is "(none)" -- the NEW targets do not exist yet, which is what
+        # the staleness check compares -- so say what the campaign targets today.
+        warnings = [f"the campaign targets language(s) {', '.join(today)} today; this adds to them"
+                    ] if has_any else [
             "the campaign targets ALL languages today; adding one restricts it to the listed ones"
         ]
         return self._propose(ctx, campaign_id, specs, warnings=warnings, widens=has_any,

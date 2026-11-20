@@ -72,6 +72,34 @@ def test_languages_are_language_constants():
     assert op.create.language.language_constant == "languageConstants/1000"
 
 
+def test_adding_a_language_says_what_the_campaign_targets_today():
+    """Live: before read "(none)" on a campaign already targeting en and fr."""
+    engine, client, _ = rig()
+    campaign(client)
+    criteria_rows(client, "LANGUAGE", [row(**{
+        "campaign_criterion.criterion_id": 1000,
+        "campaign_criterion.language.language_constant": "languageConstants/1000"}), row(**{
+        "campaign_criterion.criterion_id": 1002,
+        "campaign_criterion.language.language_constant": "languageConstants/1002"})])
+    kind = engine.add(CampaignLanguages())
+    preview = engine.preview(kind, {"campaign_id": "11", "language_ids": ["1003"]})
+    assert any("language(s) 1000, 1002 today" in w for w in preview.warnings)
+
+
+@pytest.mark.parametrize("channel", ["SHOPPING", "PERFORMANCE_MAX"])
+def test_a_shopping_or_pmax_campaign_takes_no_language_target(channel):
+    """Live: Google refused it as "not allowed for the given context"."""
+    engine, client, _ = rig()
+    client.answer("FROM campaign\n", [row(**{
+        "campaign.id": 11, "campaign.name": "Shop", "campaign.status": "ENABLED",
+        "campaign.advertising_channel_type": channel,
+        "campaign.resource_name": "customers/1112223333/campaigns/11",
+        "campaign_budget.id": 5, "campaign_budget.amount_micros": 30_000_000})])
+    kind = engine.add(CampaignLanguages())
+    with pytest.raises(Exception, match="takes no language targets"):
+        engine.preview(kind, {"campaign_id": "11", "language_ids": ["1002"]})
+
+
 def test_schedule_windows_carry_their_modifier_and_are_bounded():
     engine, client, _ = rig()
     campaign(client)
