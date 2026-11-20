@@ -253,8 +253,9 @@ class Engine:
         try:
             built = built_names(kind.build(self.ctx, payload))
         except Exception as exc:  # noqa: BLE001 - reported as a FAIL, never sent
-            return [*checks, Check("names_sent", False,
-                                   f"could not build the request to read its names: {exc}")]
+            # Usually the input itself (an image of the wrong shape), so the
+            # check is named for the request, not for the names it carries.
+            return [*checks, Check("request", False, f"the request cannot be built: {exc}")]
         if identity.prefix and identity.valid:
             unstamped = [f"{etype} {name!r}" for etype, name in built
                          if not naming.owns(identity, name)]

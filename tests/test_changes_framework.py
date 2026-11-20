@@ -382,6 +382,16 @@ def test_the_backstop_fails_a_sent_name_forging_another_identity_with_no_prefix(
     assert preview.blocked and fails(preview, "names_sent")
 
 
+def test_a_request_that_cannot_be_built_fails_under_its_own_reason():
+    """A bad input (an image of the wrong shape) is not a naming problem."""
+    engine, kind = naming_rig("AB", "max")
+    kind.build = lambda ctx, payload: (_ for _ in ()).throw(ValueError("hero.jpg is 0.50:1"))
+    preview = engine.preview(kind, {"name": "x"})
+    assert preview.blocked and fails(preview, "request")
+    assert not fails(preview, "names_sent")
+    assert any("hero.jpg is 0.50:1" in line for line in preview.checks)
+
+
 def test_the_backstop_passes_a_faithful_request():
     engine, kind = naming_rig("AB", "max")
     preview = engine.preview(kind, {"name": "x"})
