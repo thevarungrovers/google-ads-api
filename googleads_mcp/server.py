@@ -74,6 +74,9 @@ HOW TO CHANGE SOMETHING
 A preview_token is single-use, expires in 10 minutes, is not interchangeable
 between tools, and is refused if the entity moved since the preview.
 
+A LIST CUT AT ITS limit ENDS WITH {"truncated": true, "shown": N, "note": ...}:
+there is more than you were shown -- raise limit or filter before concluding.
+
 MONEY IS ALWAYS A DECIMAL STRING in major units: "2.50" means two dollars
 fifty. Never pass micros -- "2500000" would be a millionfold error, and the
 argument is rendered verbatim in the prompt a human is approving. Bid

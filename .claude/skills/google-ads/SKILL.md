@@ -120,6 +120,10 @@ optional: with only initials the name is `AB-<base>`, with only an agent name
 | `run_report(report, days, ..., segment_by_date)` | `campaigns`, `ad_groups`, `keywords`, `search_terms`, `ads`, `locations`, `devices`, `hour_of_day`, `audiences`, `assets`, `conversions_by_action`, `accounts`. One row per entity unless `segment_by_date`; says `truncated` and `total_rows_available` |
 | `list_keywords`, `list_negative_keywords`, `list_shared_negative_lists` | Keyword state and ids |
 | `list_ads`, `list_assets`, `list_labels`, `list_audiences`, `list_conversion_actions` | Ids and text; `list_labels` takes the naming filters |
+
+A list cut at its `limit` ends with `{"truncated": true, "shown": N, "note": ...}`
+(`list_negative_keywords` says `truncated: [levels]`): there is more -- raise
+`limit` or narrow the filter before concluding anything about the account.
 | `find_locations`, `find_languages` | Geo and language ids for targeting |
 | `list_recommendations` | Google's suggestions, with impact |
 | `list_recent_changes` | Who changed what in Google Ads (UI included) |

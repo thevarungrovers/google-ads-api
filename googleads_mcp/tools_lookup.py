@@ -24,6 +24,7 @@ from googleads_mcp.tools_read import (
     Mine,
     NameOrigin,
     Owner,
+    capped,
     naming_fields,
     naming_filter,
 )
@@ -483,7 +484,7 @@ def register(mcp, state) -> None:
             where.append(f"ad_group_criterion.status = {quote_literal(status)}")
         if text_contains:
             where.append(contains("ad_group_criterion.keyword.text", text_contains))
-        return [
+        return capped([
             {
                 "criterion_id": str(r["ad_group_criterion.criterion_id"]),
                 "text": r["ad_group_criterion.keyword.text"],
@@ -501,8 +502,8 @@ def register(mcp, state) -> None:
                 "campaign_name": r["campaign.name"],
             }
             for r in rows(KEYWORD_FIELDS, "ad_group_criterion", where,
-                          ("ad_group_criterion.keyword.text",), limit)
-        ]
+                          ("ad_group_criterion.keyword.text",), limit + 1)
+        ], limit, "keywords")
 
     @mcp.tool(title="List negative keywords", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -525,7 +526,7 @@ def register(mcp, state) -> None:
                 "campaign_criterion.type = 'KEYWORD'", "campaign_criterion.negative = TRUE",
                 "campaign_criterion.status != 'REMOVED'",
                 *id_condition("campaign.id", campaign_id),
-            ], ("campaign_criterion.keyword.text",), limit)
+            ], ("campaign_criterion.keyword.text",), limit + 1)
         ]
         ad_group_level = [
             {
@@ -540,7 +541,7 @@ def register(mcp, state) -> None:
                 "ad_group_criterion.status != 'REMOVED'",
                 *id_condition("campaign.id", campaign_id),
                 *id_condition("ad_group.id", ad_group_id),
-            ], ("ad_group_criterion.keyword.text",), limit)
+            ], ("ad_group_criterion.keyword.text",), limit + 1)
         ]
         shared = [
             {"shared_set_id": str(r["shared_set.id"]), "campaign_id": str(r["campaign.id"]),
@@ -551,10 +552,15 @@ def register(mcp, state) -> None:
                 *id_condition("campaign.id", campaign_id),
             ])
         ]
+        cut = [name for name, found in (("campaign_level", campaign_level),
+                                        ("ad_group_level", ad_group_level)) if len(found) > limit]
         return {
-            "campaign_level": campaign_level,
-            "ad_group_level": ad_group_level,
+            "campaign_level": campaign_level[:limit],
+            "ad_group_level": ad_group_level[:limit],
             "shared_lists_attached": shared,
+            **({"truncated": cut, "note": f"more negatives exist than the {limit} shown per "
+                                          "level: raise limit or narrow to one campaign"}
+               if cut else {}),
         }
 
     @mcp.tool(title="List shared negative keyword lists", annotations=READ_ONLY)
@@ -611,8 +617,8 @@ def register(mcp, state) -> None:
             "ad_group_ad.status != 'REMOVED'",
             *id_condition("ad_group.id", ad_group_id),
             *id_condition("campaign.id", campaign_id),
-        ], limit=limit)
-        return [
+        ], limit=limit + 1)
+        return capped([
             {
                 "ad_id": str(r["ad_group_ad.ad.id"]), "type": r["ad_group_ad.ad.type"],
                 "status": r["ad_group_ad.status"],
@@ -628,7 +634,7 @@ def register(mcp, state) -> None:
                 "campaign_id": str(r["campaign.id"]), "campaign_name": r["campaign.name"],
             }
             for r in found
-        ]
+        ], limit, "ads")
 
     @mcp.tool(title="List assets (sitelinks, callouts, snippets, ...)", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -642,7 +648,7 @@ def register(mcp, state) -> None:
     ) -> list[dict[str, Any]]:
         """Assets in the account with their ids and text."""
         where = [f"asset.type = {quote_literal(asset_type)}"] if asset_type else []
-        return [
+        return capped([
             {
                 "asset_id": str(r["asset.id"]), "name": r["asset.name"] or None,
                 "type": r["asset.type"],
@@ -653,8 +659,8 @@ def register(mcp, state) -> None:
                 "snippet_values": list(r["asset.structured_snippet_asset.values"] or []) or None,
                 "final_urls": list(r["asset.final_urls"] or []),
             }
-            for r in rows(ASSET_FIELDS, "asset", where, ("asset.id",), limit)
-        ]
+            for r in rows(ASSET_FIELDS, "asset", where, ("asset.id",), limit + 1)
+        ], limit, "assets")
 
     # -- ids the write tools take ------------------------------------------------
 
@@ -739,14 +745,14 @@ def register(mcp, state) -> None:
             where.append(
                 f"geo_target_constant.country_code = {quote_literal(country_code.upper())}"
             )
-        return [
+        return capped([
             {"geo_target_id": str(r["geo_target_constant.id"]),
              "name": r["geo_target_constant.name"],
              "canonical_name": r["geo_target_constant.canonical_name"],
              "country_code": r["geo_target_constant.country_code"],
              "type": r["geo_target_constant.target_type"]}
-            for r in rows(GEO_FIELDS, "geo_target_constant", where, limit=limit)
-        ]
+            for r in rows(GEO_FIELDS, "geo_target_constant", where, limit=limit + 1)
+        ], limit, "locations")
 
     @mcp.tool(title="Find language targets", annotations=READ_ONLY)
     @refusals_reach_the_caller

@@ -130,6 +130,21 @@ def naming_fields(state, name: str, created: bool) -> dict[str, Any]:
     return {**naming.attribute(name, identity_of(state)), "ledger_created": created}
 
 
+def capped(items: list[dict[str, Any]], limit: int, what: str) -> list[dict[str, Any]]:
+    """``items`` cut to ``limit``, ending with a marker when more exist.
+
+    Each list tool asks Google for one row more than its limit: if that row
+    came back, the list was cut, and the last element says so -- rather than
+    the agent taking a page of 50 for the whole account.
+    """
+    if len(items) <= limit:
+        return items
+    return [*items[:limit], {
+        "truncated": True, "shown": limit,
+        "note": f"more {what} exist than the {limit} shown: raise limit or narrow the filter",
+    }]
+
+
 def register(mcp, state) -> None:
     """Attach every read tool to ``mcp``."""
 
@@ -196,11 +211,11 @@ def register(mcp, state) -> None:
                 from_resource="campaign",
                 where=tuple(where),
                 order_by=("campaign.name",),
-                limit=NAMING_SCAN if filtering else limit,
+                limit=NAMING_SCAN if filtering else limit + 1,
             )
         )
         created = ledger.created_index()["campaign"]
-        return [
+        return capped([
             {
                 "campaign_id": str(r["campaign.id"]),
                 "name": r["campaign.name"],
@@ -212,7 +227,7 @@ def register(mcp, state) -> None:
                 **naming_fields(state, r["campaign.name"], str(r["campaign.id"]) in created),
             }
             for r in rows if keep(r["campaign.name"])
-        ][:limit]
+        ], limit, "campaigns")
 
     @mcp.tool(title="Find ad groups by name", annotations=READ_ONLY)
     @refusals_reach_the_caller
@@ -252,11 +267,11 @@ def register(mcp, state) -> None:
                 from_resource="ad_group",
                 where=tuple(where),
                 order_by=("ad_group.name",),
-                limit=NAMING_SCAN if filtering else limit,
+                limit=NAMING_SCAN if filtering else limit + 1,
             )
         )
         index = ledger.created_index()
-        return [
+        return capped([
             {
                 "ad_group_id": str(r["ad_group.id"]),
                 "name": r["ad_group.name"],
@@ -269,7 +284,7 @@ def register(mcp, state) -> None:
                     "ad_group", str(r["ad_group.id"]), index=index)),
             }
             for r in rows if keep(r["ad_group.name"])
-        ][:limit]
+        ], limit, "ad groups")
 
     @mcp.tool(title="Run a performance report", annotations=READ_ONLY)
     @refusals_reach_the_caller
