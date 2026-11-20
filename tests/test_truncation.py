@@ -44,3 +44,24 @@ def test_list_keywords_and_negatives_say_when_they_were_cut(monkeypatch):
     assert len(out) == 4 and out[-1]["truncated"] is True and "keywords" in out[-1]["note"]
     negatives = tools["list_negative_keywords"](ad_group_id="5", limit=3)
     assert len(negatives["ad_group_level"]) == 3 and negatives["truncated"] == ["ad_group_level"]
+
+
+def test_list_ads_reads_legacy_text_ads_and_says_when_an_ad_has_no_text(monkeypatch):
+    """Live: an old ad group's TEXT_AD was listed with empty headlines."""
+    account = ReadAccount()
+    base = {"ad_group.id": 5, "campaign.id": 7, "ad_group_ad.status": "ENABLED"}
+    account.answer("FROM ad_group_ad", [
+        row(**base, **{"ad_group_ad.ad.id": 1, "ad_group_ad.ad.type": "TEXT_AD",
+                       "ad_group_ad.ad.text_ad.headline": "Old headline",
+                       "ad_group_ad.ad.text_ad.description1": "Line one"}),
+        row(**base, **{"ad_group_ad.ad.id": 2, "ad_group_ad.ad.type": "EXPANDED_TEXT_AD",
+                       "ad_group_ad.ad.expanded_text_ad.headline_part1": "H1",
+                       "ad_group_ad.ad.expanded_text_ad.headline_part2": "H2",
+                       "ad_group_ad.ad.expanded_text_ad.description": "D1"}),
+        row(**base, **{"ad_group_ad.ad.id": 3, "ad_group_ad.ad.type": "IMAGE_AD"}),
+    ])
+    tools = read_tools(tools_lookup, monkeypatch, account)
+    old, expanded, image = tools["list_ads"](ad_group_id="5")
+    assert old["headlines"] == ["Old headline"] and old["descriptions"] == ["Line one"]
+    assert expanded["headlines"] == ["H1", "H2"] and expanded["descriptions"] == ["D1"]
+    assert image["headlines"] == [] and "IMAGE_AD carries no ad text" in image["note"]

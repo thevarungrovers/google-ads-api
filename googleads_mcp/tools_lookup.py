@@ -128,6 +128,17 @@ AD_FIELDS = (
     "ad_group_ad.ad.responsive_search_ad.descriptions",
     "ad_group_ad.ad.responsive_search_ad.path1",
     "ad_group_ad.ad.responsive_search_ad.path2",
+    # Legacy text ads, still serving on old accounts (selectable in v25).
+    "ad_group_ad.ad.expanded_text_ad.headline_part1",
+    "ad_group_ad.ad.expanded_text_ad.headline_part2",
+    "ad_group_ad.ad.expanded_text_ad.headline_part3",
+    "ad_group_ad.ad.expanded_text_ad.description",
+    "ad_group_ad.ad.expanded_text_ad.description2",
+    "ad_group_ad.ad.expanded_text_ad.path1",
+    "ad_group_ad.ad.expanded_text_ad.path2",
+    "ad_group_ad.ad.text_ad.headline",
+    "ad_group_ad.ad.text_ad.description1",
+    "ad_group_ad.ad.text_ad.description2",
     "ad_group_ad.policy_summary.approval_status",
     "ad_group_ad.policy_summary.review_status",
     "ad_group_ad.policy_summary.policy_topic_entries",
@@ -172,6 +183,38 @@ def money(value: Any) -> str | None:
     if value is None:
         return None
     return f"{Decimal(str(value)):.2f}"
+
+
+#: Ad types whose copy ad_copy reads; any other is said to be no text ad.
+TEXT_AD_TYPES = frozenset({"RESPONSIVE_SEARCH_AD", "EXPANDED_TEXT_AD", "TEXT_AD"})
+
+
+def ad_copy(r: dict[str, Any]) -> dict[str, Any]:
+    """Headlines, descriptions and paths of an ad, whatever its text-ad type.
+
+    A legacy text ad keeps its copy in other fields than a responsive search
+    ad; reading only the RSA ones listed an old account's ads with no copy at
+    all, as if they were blank. Other types (image, shopping, video) carry no
+    ad text, and say so.
+    """
+    kind = r["ad_group_ad.ad.type"]
+    if kind == "EXPANDED_TEXT_AD":
+        p = "ad_group_ad.ad.expanded_text_ad."
+        return {"headlines": [t for t in (r[p + "headline_part1"], r[p + "headline_part2"],
+                                          r[p + "headline_part3"]) if t],
+                "descriptions": [t for t in (r[p + "description"], r[p + "description2"]) if t],
+                "path1": r[p + "path1"] or None, "path2": r[p + "path2"] or None}
+    if kind == "TEXT_AD":
+        p = "ad_group_ad.ad.text_ad."
+        return {"headlines": [r[p + "headline"]] if r[p + "headline"] else [],
+                "descriptions": [t for t in (r[p + "description1"], r[p + "description2"]) if t],
+                "path1": None, "path2": None}
+    p = "ad_group_ad.ad.responsive_search_ad."
+    out = {"headlines": texts(r[p + "headlines"]), "descriptions": texts(r[p + "descriptions"]),
+           "path1": r[p + "path1"] or None, "path2": r[p + "path2"] or None}
+    if kind not in TEXT_AD_TYPES:
+        out["note"] = f"a {kind} carries no ad text; its creative is not listed here"
+    return out
 
 
 def texts(value: Any) -> list[str]:
@@ -626,10 +669,7 @@ def register(mcp, state) -> None:
                 "review_status": r["ad_group_ad.policy_summary.review_status"],
                 "policy_topics": topics(r["ad_group_ad.policy_summary.policy_topic_entries"]),
                 "final_urls": list(r["ad_group_ad.ad.final_urls"] or []),
-                "headlines": texts(r["ad_group_ad.ad.responsive_search_ad.headlines"]),
-                "descriptions": texts(r["ad_group_ad.ad.responsive_search_ad.descriptions"]),
-                "path1": r["ad_group_ad.ad.responsive_search_ad.path1"] or None,
-                "path2": r["ad_group_ad.ad.responsive_search_ad.path2"] or None,
+                **ad_copy(r),
                 "ad_group_id": str(r["ad_group.id"]), "ad_group_name": r["ad_group.name"],
                 "campaign_id": str(r["campaign.id"]), "campaign_name": r["campaign.name"],
             }
