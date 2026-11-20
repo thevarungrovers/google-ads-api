@@ -108,7 +108,11 @@ WHAT YOU CAN CHANGE (each a preview_X / apply_X pair)
                  search_ad (new ad + pause old, one request), add_sitelinks,
                  add_callouts, add_structured_snippets (assets link LIVE)
   creation       create_campaign (everything PAUSED; the EU political
-                 advertising declaration is required -- ASK the human),
+                 advertising declaration is required -- ASK the human;
+                 Display ads are responsive_display -- 1.91:1 + 1:1 images --
+                 or image: one finished banner in a Google size, e.g.
+                 300x600, 300x250, 728x90; images upload as "<prefix><w>x<h>
+                 <file>"),
                  create_ad_group (PAUSED), rename_campaign, rename_ad_group
   recommendation Google's recommendation, applied through the typed change it
                  amounts to and that change's bounds

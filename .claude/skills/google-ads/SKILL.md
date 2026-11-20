@@ -192,6 +192,13 @@ show the list and its total cost → apply → hand over the `batch_id`.
 when the human says go: `preview_campaign_status(ENABLED)` (counts the full
 budget against today's total) → apply.
 
+For **Display**, each ad is either `type="responsive_display"` (text plus 1.91:1
+and 1:1 images; Google assembles the ad) or `type="image"`: one finished banner
+at a size Google serves (300x600, 300x250, 728x90, 160x600, 320x50, ...; any
+other size is refused at preview). An image ad's `display_url` defaults to the
+final URL's host. Uploaded images are named `<prefix><w>x<h> <file>`. One ad per
+banner, e.g. an EN and an FR image ad in the same ad group.
+
 **Act on recommendations.** `list_recommendations` → check each against
 `run_report` → `preview_recommendation` for the ones worth doing (it is held to
 the typed change's bounds) → `preview_low_risk_change(resource="recommendation",

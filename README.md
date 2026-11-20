@@ -247,7 +247,7 @@ Each is a `preview_*` / `apply_*` pair.
 | Keywords | Add keywords (created paused), negative keywords at campaign or ad group level, shared negative lists |
 | Targeting | Locations, languages, ad schedule, device and location bid modifiers, Search Partners / Display expansion, audience segments |
 | Ads | Create a responsive search ad (paused), "edit" one (new ad + pause the old, in one request), sitelinks, callouts, structured snippets |
-| Creation | A whole Search or Display campaign in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames of the agent's **own** campaigns and ad groups. Names get the configured prefix |
+| Creation | A whole Search or Display campaign (responsive or uploaded image ads) in one atomic request -- **everything paused**, with the EU political advertising declaration as a required answer -- and ad groups; renames of the agent's **own** campaigns and ad groups. Names get the configured prefix |
 | Recommendations | Act on one of Google's recommendations, held to the bounds of the change it amounts to |
 | Low-risk edits | Labels, final URL suffix, tracking template, dismissing a recommendation (one tool, closed allowlist) |
 | Undo | `revert_change` -- one entry, or a whole batch |

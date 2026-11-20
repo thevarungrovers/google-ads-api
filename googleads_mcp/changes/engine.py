@@ -670,7 +670,7 @@ class Engine:
 
 #: Created message type -> naming entity type (NAME_LIMITS' keys).
 _NAMED_TYPES = {"Campaign": "campaign", "AdGroup": "ad_group",
-                "CampaignBudget": "budget", "Label": "label"}
+                "CampaignBudget": "budget", "Label": "label", "Asset": "asset"}
 
 
 def built_names(plan) -> list[tuple[str, str]]:

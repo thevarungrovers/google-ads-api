@@ -39,9 +39,11 @@ from googleads_mcp.changes.common import one, resource_status
 from googleads_mcp.guardrails import Check, check_ceiling, check_currency
 from googleads_reporting.query import quote_double
 from googleads_reporting.write import adgroups, builder, campaigns
+from googleads_reporting.write.media import asset_base, load_image
 from googleads_reporting.write.spec import (
     AdGroupSpec,
     CampaignSpec,
+    ImageAdSpec,
     ResponsiveDisplayAdSpec,
     ResponsiveSearchAdSpec,
 )
@@ -74,6 +76,15 @@ class DisplayAd(BaseModel):
     square_logo_images: list[str] = []
 
 
+class ImageAd(BaseModel):
+    type: Literal["image"] = "image"
+    image: str = Field(description="Local path to a finished banner in one of Google's "
+                       "image ad sizes, e.g. 300x600, 300x250, 728x90, 160x600")
+    final_url: str
+    display_url: str = Field(default="", description="Domain shown on the ad; "
+                             "empty = the final URL's host")
+
+
 def _ad_type(value: Any) -> str:
     """The ad's `type`, defaulting to responsive_search as SearchAd declares.
 
@@ -91,7 +102,8 @@ class NewAdGroup(BaseModel):
     cpc_bid: str | None = Field(default=None, description='Decimal string, e.g. "0.80"')
     keywords: list[str] = Field(default=[], description="PHRASE match, Search only")
     ads: list[Annotated[Union[Annotated[SearchAd, Tag("responsive_search")],
-                              Annotated[DisplayAd, Tag("responsive_display")]],
+                              Annotated[DisplayAd, Tag("responsive_display")],
+                              Annotated[ImageAd, Tag("image")]],
                         Discriminator(_ad_type)]] = Field(min_length=1)
 
 
@@ -101,6 +113,9 @@ def _spec_ad(ad: dict[str, Any]):
             headlines=ad["headlines"], descriptions=ad["descriptions"],
             final_url=ad["final_url"], path1=ad.get("path1"), path2=ad.get("path2"),
         )
+    if ad["type"] == "image":
+        return ImageAdSpec(image=Path(ad["image"]), final_url=ad["final_url"],
+                           display_url=ad.get("display_url") or "")
     return ResponsiveDisplayAdSpec(
         business_name=ad["business_name"], long_headline=ad["long_headline"],
         headlines=ad["headlines"], descriptions=ad["descriptions"], final_url=ad["final_url"],
@@ -120,6 +135,7 @@ def build_spec(payload: dict[str, Any]) -> CampaignSpec:
         budget_name=f"{payload['name']} budget",
         status="PAUSED",
         contains_eu_political_advertising=payload["contains_eu_political_advertising"],
+        media_prefix=payload.get("media_prefix", ""),
         ad_groups=[
             AdGroupSpec(
                 name=g["name"],
@@ -146,7 +162,7 @@ class CreateCampaign(ChangeKind):
     ledger_keys = (("campaign", "created"),)
     weight = 3
     revertible = False
-    creates_named = ("campaign", "ad_group")
+    creates_named = ("campaign", "ad_group", "asset")
 
     def propose(
         self,
@@ -186,9 +202,22 @@ class CreateCampaign(ChangeKind):
         payload = {
             "name": stamped.final, "channel": channel, "daily_budget": str(budget),
             "contains_eu_political_advertising": bool(contains_eu_political_advertising),
-            "ad_groups": groups,
+            "ad_groups": groups, "media_prefix": ctx.identity.prefix,
         }
-        build_spec(payload).validate()  # every problem at once, before any request
+        spec = build_spec(payload)
+        spec.validate()  # every problem at once, before any request
+        # Uploaded images are named "<file> <w>x<h>" under the same prefix.
+        # A file that cannot be read is left to the build, which says why.
+        media = []
+        for group in spec.ad_groups:
+            for ad in group.ads:
+                for image_path in getattr(ad, "image_paths", list)():
+                    try:
+                        base = asset_base(load_image(image_path))
+                    except Exception:  # noqa: BLE001 - reported by the build
+                        continue
+                    media.append(ctx.name_for_create("asset", base))
+        names += media
         currency = ctx.currency_of()
         existing = _campaign_named(ctx, payload["name"])
         checks = [
@@ -216,7 +245,8 @@ class CreateCampaign(ChangeKind):
                   "budget against the daily total."),
             payload=payload, names=names,
             created_names=[("campaign", payload["name"]),
-                           *(("ad_group", g["name"]) for g in groups)],
+                           *(("ad_group", g["name"]) for g in groups),
+                           *(("asset", m.final) for m in media)],
         )
 
     def current(self, ctx, payload):

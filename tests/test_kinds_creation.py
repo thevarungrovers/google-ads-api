@@ -354,3 +354,81 @@ def test_an_ad_without_a_type_is_a_responsive_search_ad():
         "descriptions": ["d"], "business_name": "Example Co", "final_url": "https://example.com",
         "marketing_images": ["a.png"], "square_marketing_images": ["b.png"]}]})
     assert isinstance(display.ads[0], DisplayAd)
+
+
+# -- uploaded image ads, and the media names ------------------------------
+
+
+def image_args(tmp_path, *sizes, **over):
+    from test_write_spec import png
+
+    ads = [{"type": "image", "image": str(png(tmp_path / f"banner-{w}x{h}.png", w, h, seed=f"{w}{h}")),
+            "final_url": "https://www.example.com/boxes"} for w, h in sizes]
+    return args(channel="DISPLAY", ad_groups=[{"name": "Banners", "ads": ads}], **over)
+
+
+def asset_ops(client):
+    return [op.asset_operation.create for op in client.applied[-1]["operations"]
+            if "asset_operation" in op]
+
+
+def ad_ops(client):
+    return [op.ad_group_ad_operation.create for op in client.applied[-1]["operations"]
+            if "ad_group_ad_operation" in op]
+
+
+def test_an_image_ad_uploads_its_banner_and_shows_the_final_urls_host(tmp_path):
+    engine, client, _ = named_rig("AB", "max")
+    kind = engine.add(CreateCampaign())
+    preview, _ = preview_and_apply(engine, kind, **image_args(tmp_path, (300, 600), (728, 90)))
+    assert not preview.blocked, preview.checks
+    assets = asset_ops(client)
+    assert [a.name for a in assets] == ["AB-max-300x600 banner-300x600",
+                                        "AB-max-728x90 banner-728x90"]
+    ads = ad_ops(client)
+    assert [ad.ad.image_ad.image_asset.asset for ad in ads] == [a.resource_name for a in assets]
+    assert {ad.ad.display_url for ad in ads} == {"www.example.com"}
+    assert all(ad.status.name == "PAUSED" for ad in ads)
+
+
+def test_an_image_ad_of_a_size_google_does_not_serve_is_refused(tmp_path):
+    engine, _, _ = named_rig("AB", "max")
+    kind = engine.add(CreateCampaign())
+    preview = engine.preview(kind, image_args(tmp_path, (300, 601)))
+    assert preview.blocked
+    assert any(line.startswith("FAIL") and " request:" in line and "300x601" in line
+               for line in preview.checks)
+
+
+def test_a_file_stem_cannot_make_a_media_name_read_as_an_agent(tmp_path):
+    """Live: "<stem> 300x600" after an initials-only prefix read as an agent
+    called <stem> ("AB-banner_en-..."). The size comes first, so it cannot."""
+    from test_write_spec import png
+
+    engine, client, _ = named_rig("AB", "")
+    kind = engine.add(CreateCampaign())
+    path = png(tmp_path / "spring_banner-en.png", 300, 250)
+    ad = {"type": "image", "image": str(path), "final_url": "https://example.com"}
+    preview, _ = preview_and_apply(engine, kind, **args(
+        channel="DISPLAY", ad_groups=[{"name": "Banners", "ads": [ad]}]))
+    assert not preview.blocked, preview.checks
+    assert [a.name for a in asset_ops(client)] == ["AB-300x250 spring_banner-en"]
+
+
+@pytest.mark.parametrize("owner, agent, prefix", IDENTITIES)
+def test_responsive_display_images_are_named_with_the_prefix(tmp_path, owner, agent, prefix):
+    """The backstop reads asset names too: unprefixed media blocked the preview."""
+    from test_write_spec import png
+
+    engine, client, _ = named_rig(owner, agent)
+    kind = engine.add(CreateCampaign())
+    ad = {"type": "responsive_display", "headlines": ["Example Co"], "long_headline": "Example Co",
+          "descriptions": ["Fresh food"], "business_name": "Example Co",
+          "final_url": "https://example.com",
+          "marketing_images": [str(png(tmp_path / "hero.png", 1200, 628))],
+          "square_marketing_images": [str(png(tmp_path / "sq.png", 1200, 1200))]}
+    preview, _ = preview_and_apply(engine, kind, **args(
+        channel="DISPLAY", ad_groups=[{"name": "Display", "ads": [ad]}]))
+    assert not preview.blocked, preview.checks
+    assert sorted(a.name for a in asset_ops(client)) == [
+        f"{prefix}1200x1200 sq", f"{prefix}1200x628 hero"]

@@ -136,6 +136,32 @@ class ResponsiveDisplayAdSpec:
 
 
 @dataclass
+class ImageAdSpec:
+    """An uploaded image ad: one finished banner in one of Google's fixed
+    sizes (media.IMAGE_AD_SIZES), shown as it is -- no text is assembled."""
+
+    image: Path
+    final_url: str
+    #: The domain printed on the ad. Google requires one; empty means the
+    #: final URL's host.
+    display_url: str = ""
+    channel = "DISPLAY"
+    kind = "image"
+
+    @property
+    def shown_url(self) -> str:
+        from urllib.parse import urlsplit
+
+        return self.display_url or urlsplit(self.final_url).hostname or ""
+
+    def problems(self) -> list[str]:
+        return _check_url(self.final_url)
+
+    def image_paths(self) -> list[Path]:
+        return [self.image]
+
+
+@dataclass
 class VideoResponsiveAdSpec:
     youtube_video_ids: list[str]
     headlines: list[str]
@@ -180,7 +206,8 @@ class VideoResponsiveAdSpec:
         return problems
 
 
-AdSpec = ResponsiveSearchAdSpec | ResponsiveDisplayAdSpec | VideoResponsiveAdSpec
+AdSpec = (ResponsiveSearchAdSpec | ResponsiveDisplayAdSpec | ImageAdSpec
+          | VideoResponsiveAdSpec)
 
 
 @dataclass
@@ -227,6 +254,10 @@ class CampaignSpec:
     #: rules, so it defaults to "does not contain" but is always shown in the
     #: plan -- a declaration nobody is told they are making is not one.
     contains_eu_political_advertising: bool = False
+    #: Put in front of every uploaded image asset's name ("<file> <w>x<h>"),
+    #: so media in the shared library says who uploaded it. The MCP passes its
+    #: naming prefix; the CLI leaves it empty.
+    media_prefix: str = ""
 
     def problems(self) -> list[str]:
         problems = []

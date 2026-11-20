@@ -99,6 +99,34 @@ LOGO = ImageRequirement("logo (logo_images)", 4.0, 512, 128)
 SQUARE_LOGO = ImageRequirement("square logo (square_logo_images)", 1.0, 128, 128)
 
 
+#: The sizes Google serves an uploaded image ad at (width, height). Anything
+#: else is refused, so the size is checked here, where the file name is known.
+IMAGE_AD_SIZES = frozenset({
+    (200, 200), (240, 400), (250, 250), (250, 360), (300, 250), (336, 280), (580, 400),
+    (120, 600), (160, 600), (300, 600), (300, 1050),
+    (468, 60), (728, 90), (930, 180), (970, 90), (970, 250), (980, 120),
+    (300, 50), (320, 50), (320, 100),
+})
+
+
+def check_image_ad(image: ImageFile) -> None:
+    """Raise unless ``image`` is one of Google's uploaded image ad sizes."""
+    if (image.width, image.height) not in IMAGE_AD_SIZES:
+        sizes = ", ".join(f"{w}x{h}" for w, h in sorted(IMAGE_AD_SIZES))
+        raise MutationError(
+            f"image ad problems:\n  - {image.path.name} is {image.width}x{image.height}; "
+            f"an uploaded image ad must be exactly one of {sizes}"
+        )
+
+
+def asset_base(image: ImageFile) -> str:
+    """The name an uploaded image asset is given, before any prefix.
+
+    Size first: a file stem such as "spring_banner-en" would read, after an
+    initials-only prefix, as an agent called spring_banner. A digit cannot."""
+    return f"{image.width}x{image.height} {image.path.stem}"
+
+
 def _png_size(data: bytes) -> tuple[int, int]:
     # IHDR is always the first chunk: 8-byte signature, 4 length, 4 "IHDR".
     width, height = struct.unpack(">II", data[16:24])

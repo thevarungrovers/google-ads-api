@@ -30,13 +30,16 @@ from .media import (
     SQUARE,
     SQUARE_LOGO,
     ImageFile,
+    asset_base,
     check,
+    check_image_ad,
     load_image,
 )
 from .plan import FieldChange, PlannedChange, micros
 from .spec import (
     AdGroupSpec,
     CampaignSpec,
+    ImageAdSpec,
     ResponsiveDisplayAdSpec,
     ResponsiveSearchAdSpec,
     VideoResponsiveAdSpec,
@@ -175,7 +178,7 @@ def build(
             )
 
         for ad in group.ads:
-            built = _build_ad(client, ad, temp, target, path)
+            built = _build_ad(client, ad, temp, target, path, spec.media_prefix)
             # Asset operations MUST precede the ad that references them.
             operations.extend(built["asset_operations"])
             images.extend(built["images"])
@@ -218,17 +221,17 @@ def execute_build(
     )
 
 
-def _image_asset_operation(client, image: ImageFile, resource_name: str):
+def _image_asset_operation(client, image: ImageFile, resource_name: str, prefix: str = ""):
     op = client.get_type("MutateOperation")
     asset = op.asset_operation.create
     asset.resource_name = resource_name
-    asset.name = f"{image.path.stem} {image.width}x{image.height}"
+    asset.name = prefix + asset_base(image)
     asset.type_ = client.enums.AssetTypeEnum.IMAGE
     asset.image_asset.data = image.data
     return op
 
 
-def _build_ad(client, ad, temp, target, path) -> dict[str, Any]:
+def _build_ad(client, ad, temp, target, path, prefix: str = "") -> dict[str, Any]:
     """Build one ad plus the asset operations it depends on."""
     asset_operations: list[Any] = []
     images: list[ImageFile] = []
@@ -276,11 +279,21 @@ def _build_ad(client, ad, temp, target, path) -> dict[str, Any]:
                 asset_id = temp.take()
                 resource = path("AssetService", "asset_path", asset_id)
                 asset_operations.append(
-                    _image_asset_operation(client, image, resource)
+                    _image_asset_operation(client, image, resource, prefix)
                 )
                 image_asset = client.get_type("AdImageAsset")
                 image_asset.asset = resource
                 target_list.append(image_asset)
+
+    elif isinstance(ad, ImageAdSpec):
+        image = load_image(ad.image)
+        check_image_ad(image)
+        images.append(image)
+        resource = path("AssetService", "asset_path", temp.take())
+        asset_operations.append(_image_asset_operation(client, image, resource, prefix))
+        built.name = prefix + asset_base(image)
+        built.display_url = ad.shown_url  # required on an image ad
+        built.image_ad.image_asset.asset = resource
 
     elif isinstance(ad, VideoResponsiveAdSpec):
         info = built.video_responsive_ad
